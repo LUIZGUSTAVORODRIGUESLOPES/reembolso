@@ -15,6 +15,7 @@ import {
   ChevronRight,
   ShieldCheck,
   Tag,
+  Lock,
 } from 'lucide-react'
 import { storageService } from '@/services/storageService'
 import { Expense, Trip, ExpenseCategory } from '@/types/database'
@@ -233,13 +234,22 @@ export default function TriagePage() {
     }
   }
 
+  const [isDeleting, setIsDeleting] = useState(false)
+
+  // Check if current assigned trip is locked
+  const assignedTrip = trips.find((t) => t.id === assignedTripId)
+  const isAssignedTripLocked = assignedTrip
+    ? storageService.isTripLockedForDeletion(assignedTrip.status)
+    : false
+
   const handleDeleteExpense = async () => {
     if (!currentExpense) return
+    setIsDeleting(true)
     try {
       await storageService.deleteExpense(currentExpense.id)
       toast({
         title: 'Comprovante excluído',
-        description: 'O item foi removido com sucesso.',
+        description: 'O item e o respectivo arquivo foram removidos com sucesso.',
       })
       setDeleteDialogOpen(false)
 
@@ -250,12 +260,16 @@ export default function TriagePage() {
       } else if (remaining.length === 0) {
         navigate('/')
       }
-    } catch {
+    } catch (err: any) {
       toast({
-        title: 'Erro ao excluir',
-        description: 'Não foi possível remover o comprovante.',
+        title: 'Exclusão bloqueada',
+        description:
+          err?.message ||
+          'Não foi possível remover o comprovante. Viagens fechadas ou reembolsadas não permitem exclusões.',
         variant: 'destructive',
       })
+    } finally {
+      setIsDeleting(false)
     }
   }
 
@@ -569,15 +583,25 @@ export default function TriagePage() {
               {/* Action Buttons Row */}
               <div className="pt-4 border-t border-slate-200 space-y-2">
                 <div className="flex flex-col sm:flex-row items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => setDeleteDialogOpen(true)}
-                    className="w-full sm:w-auto text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200 gap-1.5"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>Descartar / Excluir</span>
-                  </Button>
+                  {isAssignedTripLocked ? (
+                    <div
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md bg-slate-100 border border-slate-200 text-slate-500 text-xs font-medium cursor-not-allowed select-none"
+                      title="Viagem fechada — exclusão bloqueada"
+                    >
+                      <Lock className="w-3.5 h-3.5 text-slate-400" />
+                      <span>Viagem fechada — exclusão bloqueada</span>
+                    </div>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setDeleteDialogOpen(true)}
+                      className="w-full sm:w-auto text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200 gap-1.5"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Descartar / Excluir</span>
+                    </Button>
+                  )}
 
                   <div className="flex items-center gap-2 w-full sm:w-auto sm:ml-auto">
                     <Button
@@ -625,21 +649,27 @@ export default function TriagePage() {
           <AlertDialogHeader>
             <AlertDialogTitle className="text-rose-600 flex items-center gap-2">
               <Trash2 className="w-5 h-5" />
-              Descartar Comprovante?
+              Descartar e Excluir Comprovante?
             </AlertDialogTitle>
-            <AlertDialogDescription className="text-slate-600 text-xs sm:text-sm">
-              Tem certeza que deseja descartar este comprovante{' '}
-              <strong>"{currentExpense.file_name}"</strong>? Esta ação excluirá os dados extraídos
-              pelo OCR e não poderá ser desfeita.
+            <AlertDialogDescription className="text-slate-600 text-xs sm:text-sm space-y-2">
+              <p>
+                Tem certeza que deseja descartar este comprovante{' '}
+                <strong>"{currentExpense.file_name}"</strong>?
+              </p>
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-amber-900 text-xs">
+                Esta ação excluirá os dados extraídos pelo OCR e removerá o arquivo correspondente
+                do armazenamento em nuvem permanentemente.
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogCancel disabled={isDeleting}>Cancelar</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDeleteExpense}
+              disabled={isDeleting}
               className="bg-rose-600 hover:bg-rose-700 text-white"
             >
-              Sim, Excluir Comprovante
+              {isDeleting ? 'Excluindo...' : 'Sim, Excluir Comprovante e Arquivo'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

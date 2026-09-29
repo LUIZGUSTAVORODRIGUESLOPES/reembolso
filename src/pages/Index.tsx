@@ -17,6 +17,8 @@ import {
   Filter,
   ArrowRight,
   ShieldAlert,
+  Trash2,
+  Lock,
 } from 'lucide-react'
 import { storageService } from '@/services/storageService'
 import { Trip, TripStatus } from '@/types/database'
@@ -37,8 +39,20 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { CreateTripModal } from '@/components/CreateTripModal'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { useToast } from '@/hooks/use-toast'
 
 export default function Index() {
+  const { toast } = useToast()
   const navigate = useNavigate()
   const [trips, setTrips] = useState<Trip[]>([])
   const [loading, setLoading] = useState(true)
@@ -52,6 +66,10 @@ export default function Index() {
   const [periodFilter, setPeriodFilter] = useState<string>('todos')
   const [statusFilter, setStatusFilter] = useState<string>('todos')
   const [modalOpen, setModalOpen] = useState(false)
+
+  // Quick deletion from listing
+  const [tripToDelete, setTripToDelete] = useState<Trip | null>(null)
+  const [isDeletingTrip, setIsDeletingTrip] = useState(false)
 
   const loadData = async () => {
     setLoading(true)
@@ -111,6 +129,29 @@ export default function Index() {
       return true
     })
   }, [trips, periodFilter, statusFilter])
+
+  const confirmDeleteTrip = async () => {
+    if (!tripToDelete) return
+    setIsDeletingTrip(true)
+    try {
+      await storageService.deleteTrip(tripToDelete.id)
+      toast({
+        title: 'Viagem excluída',
+        description: `A viagem para ${tripToDelete.destination} e todos os comprovantes vinculados foram removidos com sucesso.`,
+      })
+      setTripToDelete(null)
+      loadData()
+    } catch (err: any) {
+      toast({
+        title: 'Exclusão não permitida',
+        description:
+          err?.message || 'Viagens com status fechada ou reembolsada não podem ser excluídas.',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsDeletingTrip(false)
+    }
+  }
 
   const getTransportIcon = (type: string) => {
     switch (type) {
@@ -381,14 +422,35 @@ export default function Index() {
                         </td>
 
                         <td className="py-3.5 px-4 text-right" onClick={(e) => e.stopPropagation()}>
-                          <Button
-                            size="sm"
-                            onClick={() => navigate(`/trips/${trip.id}`)}
-                            className="bg-[#1e40af] hover:bg-[#1d3d9e] text-white text-xs h-8 px-3 gap-1 shadow-sm"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                            <span>Auditar / Detalhes</span>
-                          </Button>
+                          <div className="flex items-center justify-end gap-1.5">
+                            {storageService.isTripLockedForDeletion(trip.status) ? (
+                              <div
+                                className="h-8 w-8 flex items-center justify-center text-slate-300 cursor-not-allowed"
+                                title="Viagem fechada — exclusão bloqueada"
+                              >
+                                <Lock className="w-3.5 h-3.5" />
+                              </div>
+                            ) : (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setTripToDelete(trip)}
+                                className="h-8 w-8 p-0 text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                                title="Excluir Viagem"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </Button>
+                            )}
+
+                            <Button
+                              size="sm"
+                              onClick={() => navigate(`/trips/${trip.id}`)}
+                              className="bg-[#1e40af] hover:bg-[#1d3d9e] text-white text-xs h-8 px-3 gap-1 shadow-sm"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>Auditar / Detalhes</span>
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                     )
@@ -441,17 +503,42 @@ export default function Index() {
                       </div>
                     </div>
 
-                    <Button
-                      size="sm"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        navigate(`/trips/${trip.id}`)
-                      }}
-                      className="w-full bg-[#1e40af] text-white text-xs h-8 mt-2"
-                    >
-                      <Eye className="w-3.5 h-3.5 mr-1" />
-                      Auditar / Ver Detalhes
-                    </Button>
+                    <div className="flex items-center gap-2 pt-2">
+                      {storageService.isTripLockedForDeletion(trip.status) ? (
+                        <div
+                          className="flex items-center justify-center gap-1 text-[11px] text-slate-400 py-1.5 px-2 bg-slate-100 rounded border border-slate-200 cursor-not-allowed flex-1"
+                          title="Viagem fechada — exclusão bloqueada"
+                        >
+                          <Lock className="w-3 h-3" />
+                          <span>Exclusão bloqueada</span>
+                        </div>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setTripToDelete(trip)
+                          }}
+                          className="text-xs h-8 px-2.5 text-rose-600 border-rose-200 hover:bg-rose-50"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 mr-1" />
+                          Excluir
+                        </Button>
+                      )}
+
+                      <Button
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          navigate(`/trips/${trip.id}`)
+                        }}
+                        className="flex-1 bg-[#1e40af] text-white text-xs h-8"
+                      >
+                        <Eye className="w-3.5 h-3.5 mr-1" />
+                        Auditar / Ver Detalhes
+                      </Button>
+                    </div>
                   </div>
                 )
               })}
@@ -469,6 +556,41 @@ export default function Index() {
           navigate(`/trips/${newTrip.id}`)
         }}
       />
+
+      {/* Delete Trip Alert Dialog */}
+      <AlertDialog open={!!tripToDelete} onOpenChange={(open) => !open && setTripToDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-rose-600 flex items-center gap-2">
+              <Trash2 className="w-5 h-5 text-rose-600" />
+              Excluir Viagem Inteira?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-600 text-xs sm:text-sm space-y-2">
+              <p>
+                Tem certeza que deseja excluir a viagem para{' '}
+                <strong className="text-slate-900">"{tripToDelete?.destination}"</strong>?
+              </p>
+              <div className="bg-rose-50 border border-rose-200 rounded-lg p-3 text-rose-800 text-xs space-y-1">
+                <p className="font-semibold">⚠️ Exclusão em cascata:</p>
+                <p>
+                  Todas as despesas associadas e os respectivos arquivos de comprovantes fiscais
+                  (PDFs e imagens) no bucket de armazenamento serão excluídos permanentemente.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="pt-2">
+            <AlertDialogCancel disabled={isDeletingTrip}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDeleteTrip}
+              disabled={isDeletingTrip}
+              className="bg-rose-600 hover:bg-rose-700 text-white font-semibold"
+            >
+              {isDeletingTrip ? 'Excluindo...' : 'Sim, Excluir Viagem e Comprovantes'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

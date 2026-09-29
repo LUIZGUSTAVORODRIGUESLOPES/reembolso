@@ -25,6 +25,7 @@ import {
   ShieldCheck,
   Tag,
   Building2,
+  Lock,
 } from 'lucide-react'
 import { storageService } from '@/services/storageService'
 import { Trip, Expense, AuditEvaluationRule, ExpenseCategory, TripStatus } from '@/types/database'
@@ -49,6 +50,16 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import {
   Select,
   SelectContent,
@@ -91,6 +102,13 @@ export default function TripDetailPage() {
   const [editDestination, setEditDestination] = useState('')
   const [editMotivo, setEditMotivo] = useState('')
   const [editStatus, setEditStatus] = useState<TripStatus>('em_triagem')
+
+  // Deletion modals state
+  const [deleteTripDialogOpen, setDeleteTripDialogOpen] = useState(false)
+  const [isDeletingTrip, setIsDeletingTrip] = useState(false)
+
+  const [expenseToDelete, setExpenseToDelete] = useState<Expense | null>(null)
+  const [isDeletingExpense, setIsDeletingExpense] = useState(false)
 
   const loadTripData = async () => {
     if (!id) return
@@ -230,19 +248,52 @@ export default function TripDetailPage() {
     }
   }
 
-  const handleDeleteExpense = async (expId: string) => {
+  const confirmDeleteExpense = async () => {
+    if (!expenseToDelete) return
+    setIsDeletingExpense(true)
     try {
-      await storageService.deleteExpense(expId)
+      await storageService.deleteExpense(expenseToDelete.id)
       toast({
         title: 'Comprovante excluído',
-        description: 'O item foi removido com sucesso.',
+        description: `O item "${expenseToDelete.merchant_name}" e seu respectivo arquivo no armazenamento foram removidos permanentemente.`,
       })
+      setExpenseToDelete(null)
       loadTripData()
-    } catch {
+    } catch (err: any) {
       toast({
-        title: 'Erro ao excluir comprovante',
+        title: 'Exclusão não permitida',
+        description:
+          err?.message ||
+          'Não foi possível excluir o comprovante. Verifique se a viagem não está fechada ou reembolsada.',
         variant: 'destructive',
       })
+    } finally {
+      setIsDeletingExpense(false)
+    }
+  }
+
+  const confirmDeleteTrip = async () => {
+    if (!trip) return
+    setIsDeletingTrip(true)
+    try {
+      await storageService.deleteTrip(trip.id)
+      toast({
+        title: 'Viagem excluída com sucesso',
+        description:
+          'A viagem, suas despesas e todos os comprovantes anexados foram removidos permanentemente.',
+      })
+      setDeleteTripDialogOpen(false)
+      navigate('/')
+    } catch (err: any) {
+      toast({
+        title: 'Exclusão não permitida',
+        description:
+          err?.message ||
+          'Não foi possível excluir a viagem. Viagens fechadas ou reembolsadas são imutáveis.',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsDeletingTrip(false)
     }
   }
 
@@ -283,11 +334,12 @@ export default function TripDetailPage() {
   ).length
   const auditPercent = totalRules > 0 ? Math.round((passedRules / totalRules) * 100) : 100
   const statusConf = TRIP_STATUS_CONFIG[trip.status]
+  const isTripLocked = storageService.isTripLockedForDeletion(trip.status)
 
   return (
     <div className="space-y-6">
       {/* Back button & quick navigation */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <Button
           variant="ghost"
           size="sm"
@@ -298,7 +350,28 @@ export default function TripDetailPage() {
           <span>Voltar ao Dashboard</span>
         </Button>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Delete Trip Action */}
+          {isTripLocked ? (
+            <div
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-slate-100 border border-slate-200 text-slate-500 text-xs font-medium cursor-not-allowed select-none"
+              title="Viagem fechada — exclusão bloqueada permanentemente após emissão do pedido de reembolso"
+            >
+              <Lock className="w-3.5 h-3.5 text-slate-400" />
+              <span>Viagem fechada — exclusão bloqueada</span>
+            </div>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setDeleteTripDialogOpen(true)}
+              className="text-xs gap-1.5 text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Excluir Viagem</span>
+            </Button>
+          )}
+
           <Button
             variant="outline"
             size="sm"
@@ -542,7 +615,8 @@ export default function TripDetailPage() {
               variant="outline"
               size="sm"
               onClick={() => navigate('/upload')}
-              className="text-xs gap-1.5 text-slate-700"
+              disabled={isTripLocked}
+              className="text-xs gap-1.5 text-slate-700 disabled:opacity-50"
             >
               <Upload className="w-3.5 h-3.5" />
               Upload em Lote
@@ -551,10 +625,11 @@ export default function TripDetailPage() {
             <Button
               size="sm"
               onClick={() => setAddExpenseOpen(true)}
-              className="bg-[#1e40af] hover:bg-[#1d3d9e] text-white text-xs gap-1.5 shadow-sm"
+              disabled={isTripLocked}
+              className="bg-[#1e40af] hover:bg-[#1d3d9e] text-white text-xs gap-1.5 shadow-sm disabled:opacity-50"
             >
-              <Plus className="w-3.5 h-3.5" />
-              Adicionar Comprovante Manualmente
+              {isTripLocked ? <Lock className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+              {isTripLocked ? 'Adição Bloqueada' : 'Adicionar Comprovante Manualmente'}
             </Button>
           </div>
         </div>
@@ -658,15 +733,24 @@ export default function TripDetailPage() {
                           >
                             <Eye className="w-3.5 h-3.5" />
                           </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDeleteExpense(exp.id)}
-                            className="h-7 w-7 p-0 text-slate-400 hover:text-rose-600"
-                            title="Excluir Comprovante"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </Button>
+                          {isTripLocked ? (
+                            <div
+                              className="h-7 w-7 flex items-center justify-center text-slate-300 cursor-not-allowed"
+                              title="Viagem fechada — exclusão de despesa bloqueada"
+                            >
+                              <Lock className="w-3.5 h-3.5" />
+                            </div>
+                          ) : (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setExpenseToDelete(exp)}
+                              className="h-7 w-7 p-0 text-slate-400 hover:text-rose-600"
+                              title="Excluir Comprovante e Arquivo"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -926,6 +1010,94 @@ export default function TripDetailPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {/* Alert Dialog: Confirm Delete Trip */}
+      <AlertDialog open={deleteTripDialogOpen} onOpenChange={setDeleteTripDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-rose-600 flex items-center gap-2">
+              <Trash2 className="w-5 h-5 text-rose-600" />
+              Excluir Viagem Inteira?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-600 text-xs sm:text-sm space-y-2">
+              <p>
+                Tem certeza que deseja excluir permanentemente a viagem para{' '}
+                <strong className="text-slate-900">"{trip.destination}"</strong> (período de{' '}
+                {formatDateRangeBR(trip.start_date, trip.end_date)})?
+              </p>
+              <div className="bg-rose-50 border border-rose-200 rounded-lg p-3 text-rose-800 text-xs space-y-1">
+                <p className="font-semibold">⚠️ Ação irreversível em cascata:</p>
+                <ul className="list-disc list-inside space-y-0.5 text-rose-700">
+                  <li>
+                    Todas as <strong>{expenses.length} despesas</strong> vinculadas serão apagadas
+                    do banco de dados.
+                  </li>
+                  <li>
+                    Todos os <strong>comprovantes fiscais (PDFs e imagens)</strong> armazenados no
+                    bucket <code>comprovantes</code> serão removidos permanentemente.
+                  </li>
+                  <li>Os logs de auditoria e compliance desta viagem serão descartados.</li>
+                </ul>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="pt-2">
+            <AlertDialogCancel disabled={isDeletingTrip}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDeleteTrip}
+              disabled={isDeletingTrip}
+              className="bg-rose-600 hover:bg-rose-700 text-white font-semibold"
+            >
+              {isDeletingTrip
+                ? 'Excluindo Viagem e Comprovantes...'
+                : 'Sim, Excluir Viagem e Arquivos'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Alert Dialog: Confirm Delete Single Expense */}
+      <AlertDialog
+        open={!!expenseToDelete}
+        onOpenChange={(open) => !open && setExpenseToDelete(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-rose-600 flex items-center gap-2">
+              <Trash2 className="w-5 h-5 text-rose-600" />
+              Excluir Comprovante de Despesa?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-600 text-xs sm:text-sm space-y-2">
+              <p>
+                Deseja excluir a despesa de{' '}
+                <strong className="text-slate-900">{expenseToDelete?.merchant_name}</strong> no
+                valor de{' '}
+                <strong className="text-emerald-700">
+                  {expenseToDelete && formatCurrencyBRL(expenseToDelete.amount)}
+                </strong>
+                ?
+              </p>
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-amber-800 text-xs space-y-1">
+                <p className="font-semibold">Aviso sobre o arquivo de comprovante:</p>
+                <p>
+                  O arquivo <strong>"{expenseToDelete?.file_name}"</strong> será removido
+                  permanentemente do armazenamento em nuvem e o total acumulado da viagem será
+                  recalculado automaticamente.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="pt-2">
+            <AlertDialogCancel disabled={isDeletingExpense}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDeleteExpense}
+              disabled={isDeletingExpense}
+              className="bg-rose-600 hover:bg-rose-700 text-white font-semibold"
+            >
+              {isDeletingExpense ? 'Excluindo Despesa e Arquivo...' : 'Sim, Excluir Comprovante'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

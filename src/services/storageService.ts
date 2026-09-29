@@ -5,6 +5,7 @@ import {
   AuditRulesLog,
   ExpenseCategory,
   AuditEvaluationRule,
+  TripStatus,
 } from '@/types/database'
 
 class SupabaseStorageService {
@@ -96,12 +97,187 @@ class SupabaseStorageService {
     return data ? this.mapTripRow(data) : null
   }
 
-  public async deleteTrip(id: string): Promise<boolean> {
-    const { error } = await this.client.from('trips').delete().eq('id', id)
+  public isTripLockedForDeletion(status: TripStatus | string): boolean {
+    return status === 'fechada' || status === 'reembolsada'
+  }
+
+  /**
+   * Helper to extract the relative file path inside the 'comprovantes' bucket from a file_url or file_name.
+   */
+  private extractStoragePath(fileUrl?: string | null, fileName?: string | null): string | null {
+    if (!fileUrl && !fileName) return null
+    const url = fileUrl?.trim() || ''
+
+    if (url.startsWith('data:') || url.startsWith('blob:')) {
+      return null
+    }
+
+    // Example public URL:
+    // https://xxx.supabase.co/storage/v1/object/public/comprovantes/123_abc.pdf
+    const marker = '/storage/v1/object/public/comprovantes/'
+    if (url.includes(marker)) {
+      const path = url.split(marker)[1]
+      return path ? decodeURIComponent(path) : null
+    }
+
+    // Direct object path without slash
+    if (url && !url.includes('/') && !url.startsWith('http')) {
+      return url
+    }
+
+    return null
+  }
+
+  /**
+   * Deletes files from the 'comprovantes' Supabase Storage bucket.
+   */
+  public async deleteStorageFiles(filePaths: string[]): Promise<void> {
+    const cleanPaths = Array.from(new Set(filePaths.filter(Boolean)))
+    if (cleanPaths.length === 0) return
+
+    try {
+      const { error } = await supabase.storage.from('comprovantes').remove(cleanPaths)
+      if (error) {
+        console.warn('Warning removing files from comprovantes storage:', error)
+      }
+    } catch (err) {
+      console.warn('Failed to delete storage objects:', err)
+    }
+  }
+
+  /**
+   * Delete a single expense and also remove its corresponding receipt object from Storage.
+   */
+  public async deleteExpense(id: string): Promise<boolean> {
+    const current = await this.getExpense(id)
+    if (!current) return true
+
+    if (current.trip_id) {
+      const trip = await this.getTrip(current.trip_id)
+      if (trip && this.isTripLockedForDeletion(trip.status)) {
+        throw new Error('Não é possível excluir despesa de uma viagem já fechada ou reembolsada.')
+      }
+    }
+
+    // Attempt to identify storage file to delete
+    const filePathsToDelete: string[] = []
+    const pathFromUrl = this.extractStoragePath(current.file_url, current.file_name)
+    if (pathFromUrl) {
+      filePathsToDelete.push(pathFromUrl)
+    }
+
+    // If file_url didn't have full path, see if bucket has matching file
+    if (filePathsToDelete.length === 0 && current.file_name) {
+      try {
+        const { data: bucketList } = await supabase.storage
+          .from('comprovantes')
+          .list('', { limit: 100 })
+        const cleanTarget = current.file_name.toLowerCase().replace(/[^a-z0-9.-]/g, '_')
+        const matched = bucketList?.find((f) => {
+          const low = f.name.toLowerCase()
+          return (
+            low.endsWith(cleanTarget) ||
+            low.includes(cleanTarget.replace('.pdf', '').replace(/\.[a-z]+$/, ''))
+          )
+        })
+        if (matched) {
+          filePathsToDelete.push(matched.name)
+        }
+      } catch (err) {
+        console.warn('Error matching bucket file for deletion:', err)
+      }
+    }
+
+    const { error } = await this.client.from('expenses').delete().eq('id', id)
     if (error) {
-      console.error('Error deleting trip:', error)
+      console.error('Error deleting expense:', error)
       throw error
     }
+
+    // Delete corresponding physical storage file(s)
+    if (filePathsToDelete.length > 0) {
+      await this.deleteStorageFiles(filePathsToDelete)
+    }
+
+    if (current.trip_id) {
+      await this.recalculateTripTotal(current.trip_id)
+    }
+
+    return true
+  }
+
+  /**
+   * Delete a full trip in cascade:
+   * 1. Check status (reject if 'fechada' or 'reembolsada')
+   * 2. Find all attached expenses
+   * 3. Collect receipt files in bucket 'comprovantes' and delete them
+   * 4. Delete expenses
+   * 5. Delete audit_rules_log
+   * 6. Delete trip
+   */
+  public async deleteTrip(id: string): Promise<boolean> {
+    const trip = await this.getTrip(id)
+    if (!trip) return true
+
+    if (this.isTripLockedForDeletion(trip.status)) {
+      throw new Error('Não é permitido excluir uma viagem já fechada ou reembolsada.')
+    }
+
+    const expenses = await this.listExpenses(id)
+
+    // Collect all storage paths
+    const pathsToDelete: string[] = []
+    let bucketFilesCache: string[] | null = null
+
+    for (const exp of expenses) {
+      const extracted = this.extractStoragePath(exp.file_url, exp.file_name)
+      if (extracted) {
+        pathsToDelete.push(extracted)
+      } else if (exp.file_name) {
+        if (!bucketFilesCache) {
+          try {
+            const { data } = await supabase.storage.from('comprovantes').list('', { limit: 100 })
+            bucketFilesCache = (data || []).map((f) => f.name)
+          } catch {
+            bucketFilesCache = []
+          }
+        }
+        const cleanTarget = exp.file_name.toLowerCase().replace(/[^a-z0-9.-]/g, '_')
+        const matched = bucketFilesCache.find((name) => {
+          const low = name.toLowerCase()
+          return (
+            low.endsWith(cleanTarget) ||
+            low.includes(cleanTarget.replace('.pdf', '').replace(/\.[a-z]+$/, ''))
+          )
+        })
+        if (matched) {
+          pathsToDelete.push(matched)
+        }
+      }
+    }
+
+    // Delete storage objects from bucket
+    if (pathsToDelete.length > 0) {
+      await this.deleteStorageFiles(pathsToDelete)
+    }
+
+    // Delete expenses linked to this trip
+    const { error: expError } = await this.client.from('expenses').delete().eq('trip_id', id)
+    if (expError) {
+      console.error('Error deleting expenses of trip:', expError)
+      throw expError
+    }
+
+    // Delete audit_rules_log (has cascade in DB, but explicit cleanup guarantees safety)
+    await this.client.from('audit_rules_log').delete().eq('trip_id', id)
+
+    // Delete the trip record
+    const { error: tripError } = await this.client.from('trips').delete().eq('id', id)
+    if (tripError) {
+      console.error('Error deleting trip:', tripError)
+      throw tripError
+    }
+
     return true
   }
 
@@ -225,23 +401,6 @@ class SupabaseStorageService {
     }
 
     return updated
-  }
-
-  public async deleteExpense(id: string): Promise<boolean> {
-    const current = await this.getExpense(id)
-    const tripId = current?.trip_id
-
-    const { error } = await this.client.from('expenses').delete().eq('id', id)
-    if (error) {
-      console.error('Error deleting expense:', error)
-      throw error
-    }
-
-    if (tripId) {
-      await this.recalculateTripTotal(tripId)
-    }
-
-    return true
   }
 
   // Duplicate Check: same issue_date + exact amount + merchant_name/CNPJ

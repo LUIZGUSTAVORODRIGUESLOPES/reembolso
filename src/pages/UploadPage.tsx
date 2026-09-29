@@ -343,8 +343,10 @@ export default function UploadPage() {
           issue_date: ext?.issue_date || new Date().toISOString().split('T')[0],
           issue_time: ext?.issue_time || null,
           category: ext?.category || 'outros',
-          merchant_name: ext?.merchant_name || 'Estabelecimento a identificar',
-          amount: ext?.amount ?? 0,
+          merchant_name: ext?.merchant_name
+            ? ext.merchant_name.trim()
+            : 'Estabelecimento a identificar',
+          amount: ext?.amount !== null && ext?.amount !== undefined ? Number(ext.amount) : 0,
           ocr_raw_text: ext?.ocr_raw_text || 'Arquivo sem texto extraído',
           is_verified: false,
           audit_flags: auditFlags,

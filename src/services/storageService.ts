@@ -117,10 +117,12 @@ class SupabaseStorageService {
 
   // Expenses CRUD
   public async listExpenses(tripId?: string): Promise<Expense[]> {
-    let query = this.client.from('expenses').select('*').order('issue_date', { ascending: false })
+    let query = this.client.from('expenses').select('*')
 
     if (tripId) {
-      query = query.eq('trip_id', tripId)
+      query = query.eq('trip_id', tripId).order('issue_date', { ascending: false })
+    } else {
+      query = query.order('created_at', { ascending: true })
     }
 
     const { data, error } = await query

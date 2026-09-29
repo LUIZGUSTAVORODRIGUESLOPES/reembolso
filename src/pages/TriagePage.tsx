@@ -19,6 +19,7 @@ import {
 import { storageService } from '@/services/storageService'
 import { Expense, Trip, ExpenseCategory } from '@/types/database'
 import { formatCurrencyBRL, formatDateBR, CATEGORY_LABELS } from '@/lib/formatters'
+import { parseBrazilianReceiptText } from '@/services/ocrService'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -58,6 +59,7 @@ export default function TriagePage() {
 
   // Form edit state for current expense
   const [issueDate, setIssueDate] = useState('')
+  const [issueTime, setIssueTime] = useState('')
   const [merchantName, setMerchantName] = useState('')
   const [cnpj, setCnpj] = useState('')
   const [category, setCategory] = useState<ExpenseCategory>('outros')
@@ -75,7 +77,13 @@ export default function TriagePage() {
       const allExpenses = await storageService.listExpenses()
       // Filter unverified first, or fall back to all if all are verified
       const unverified = allExpenses.filter((e) => !e.is_verified)
-      const listToReview = unverified.length > 0 ? unverified : allExpenses
+      // Sort with oldest created first so receipts upload sequence is respected
+      const listToReview = (unverified.length > 0 ? unverified : allExpenses)
+        .slice()
+        .sort((a, b) => {
+          // Receipts that have extracted amounts or dates should be prioritized or in natural order
+          return a.file_name.localeCompare(b.file_name)
+        })
 
       setTrips(allTrips)
       setExpenses(listToReview)
@@ -93,14 +101,72 @@ export default function TriagePage() {
   const currentExpense = expenses[currentIndex] || null
 
   useEffect(() => {
-    if (currentExpense) {
-      setIssueDate(currentExpense.issue_date || '')
-      setMerchantName(currentExpense.merchant_name || '')
-      setCnpj(currentExpense.cnpj || '')
-      setCategory(currentExpense.category || 'outros')
-      setAmountStr(String(currentExpense.amount || '0'))
-      setAssignedTripId(currentExpense.trip_id || (trips[0]?.id ?? ''))
+    if (!currentExpense) {
+      setIssueDate('')
+      setIssueTime('')
+      setMerchantName('')
+      setCnpj('')
+      setCategory('outros')
+      setAmountStr('')
+      setAssignedTripId('')
+      return
     }
+
+    // If the record has raw OCR text, extract any fields that might be missing or generic
+    const parsedFallback =
+      currentExpense.ocr_raw_text &&
+      currentExpense.ocr_raw_text !== 'Arquivo sem texto extraído' &&
+      currentExpense.ocr_raw_text !== 'Nenhum texto legível detectado.'
+        ? parseBrazilianReceiptText(currentExpense.ocr_raw_text)
+        : null
+
+    // Determine issue_date: prefer stored date unless it matches upload fallback (e.g. today) and fallback has better date
+    const initialDate = currentExpense.issue_date || parsedFallback?.issue_date || ''
+    setIssueDate(initialDate)
+
+    // Determine issue_time
+    const initialTime = currentExpense.issue_time || parsedFallback?.issue_time || ''
+    setIssueTime(initialTime)
+
+    // Determine merchant_name: if stored is generic "Estabelecimento a identificar", check fallback
+    let initialMerchant = currentExpense.merchant_name || ''
+    if (
+      (!initialMerchant || initialMerchant === 'Estabelecimento a identificar') &&
+      parsedFallback?.merchant_name
+    ) {
+      initialMerchant = parsedFallback.merchant_name
+    }
+    setMerchantName(initialMerchant)
+
+    // Determine CNPJ: prefer stored, fallback to OCR parsed
+    const initialCnpj = currentExpense.cnpj || parsedFallback?.cnpj || ''
+    setCnpj(initialCnpj)
+
+    // Determine category: if stored is 'outros' and fallback classified a specific one
+    let initialCategory = currentExpense.category || 'outros'
+    if (
+      initialCategory === 'outros' &&
+      parsedFallback?.category &&
+      parsedFallback.category !== 'outros'
+    ) {
+      initialCategory = parsedFallback.category
+    }
+    setCategory(initialCategory)
+
+    // Determine amount: if stored is 0 or null, check fallback
+    let initialAmount =
+      currentExpense.amount !== null &&
+      currentExpense.amount !== undefined &&
+      currentExpense.amount > 0
+        ? String(currentExpense.amount)
+        : ''
+    if (!initialAmount && parsedFallback?.amount && parsedFallback.amount > 0) {
+      initialAmount = String(parsedFallback.amount)
+    }
+    setAmountStr(initialAmount)
+
+    // Assigned trip: preserve expense trip_id or select first available trip
+    setAssignedTripId(currentExpense.trip_id || (trips[0]?.id ?? ''))
   }, [currentIndex, currentExpense, trips])
 
   // Duplicate match details if flagged
@@ -122,8 +188,9 @@ export default function TriagePage() {
     try {
       const updated = await storageService.updateExpense(currentExpense.id, {
         issue_date: issueDate,
+        issue_time: issueTime || null,
         merchant_name: merchantName,
-        cnpj,
+        cnpj: cnpj || null,
         category,
         amount: parsedAmount,
         trip_id: assignedTripId || null,
@@ -338,26 +405,44 @@ export default function TriagePage() {
                 </p>
               </div>
 
-              {/* Data Real de Emissão */}
-              <div className="space-y-1.5">
-                <Label
-                  htmlFor="issue_date"
-                  className="text-xs font-semibold text-slate-700 flex items-center gap-1.5"
-                >
-                  <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                  Data Real de Emissão *
-                </Label>
-                <Input
-                  id="issue_date"
-                  type="date"
-                  value={issueDate}
-                  onChange={(e) => setIssueDate(e.target.value)}
-                  className="text-sm bg-slate-50 focus:bg-white"
-                  required
-                />
-                <p className="text-[11px] text-slate-400">
-                  Prevalece sobre a data de upload para todos os fins contábeis.
-                </p>
+              {/* Data Real de Emissão e Hora */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label
+                    htmlFor="issue_date"
+                    className="text-xs font-semibold text-slate-700 flex items-center gap-1.5"
+                  >
+                    <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                    Data Real de Emissão *
+                  </Label>
+                  <Input
+                    id="issue_date"
+                    type="date"
+                    value={issueDate}
+                    onChange={(e) => setIssueDate(e.target.value)}
+                    className="text-sm bg-slate-50 focus:bg-white"
+                    required
+                  />
+                  <p className="text-[11px] text-slate-400">Data fiscal lida do comprovante.</p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label
+                    htmlFor="issue_time"
+                    className="text-xs font-semibold text-slate-700 flex items-center gap-1.5"
+                  >
+                    <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                    Hora de Emissão (opcional)
+                  </Label>
+                  <Input
+                    id="issue_time"
+                    type="time"
+                    value={issueTime}
+                    onChange={(e) => setIssueTime(e.target.value)}
+                    className="text-sm bg-slate-50 focus:bg-white"
+                  />
+                  <p className="text-[11px] text-slate-400">Hora extraída pelo OCR (ex: 20:47).</p>
+                </div>
               </div>
 
               {/* Estabelecimento */}
@@ -377,6 +462,12 @@ export default function TriagePage() {
                   className="text-sm bg-slate-50 focus:bg-white font-medium"
                   required
                 />
+                {merchantName === 'Estabelecimento a identificar' && (
+                  <p className="text-[11px] text-amber-600 font-medium">
+                    ⚠️ Nome não detectado automaticamente pelo OCR. Por favor confirme com o
+                    documento.
+                  </p>
+                )}
               </div>
 
               {/* CNPJ */}

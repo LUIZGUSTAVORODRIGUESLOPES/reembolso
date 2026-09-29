@@ -16,37 +16,94 @@ class SupabaseStorageService {
 
   // Trips CRUD
   public async listTrips(): Promise<Trip[]> {
-    const { data, error } = await this.client
-      .from('trips')
-      .select('*, user_profile:profiles(*)')
-      .order('created_at', { ascending: false })
+    // 1. First attempt: full join with profiles
+    let tripsRaw: any[] | null = null
 
-    if (error) {
-      console.error('Error fetching trips:', error)
-      // Fallback in case join fails or relations not yet reloaded in client
+    try {
+      const { data, error } = await this.client
+        .from('trips')
+        .select('*, user_profile:profiles(*)')
+        .order('created_at', { ascending: false })
+
+      if (!error && data) {
+        tripsRaw = data
+      } else {
+        console.warn(
+          'Trips join with profiles failed or returned error, attempting fallback select:',
+          error,
+        )
+      }
+    } catch (joinErr) {
+      console.warn('Caught error fetching trips with profile join:', joinErr)
+    }
+
+    // 2. Fallback query if join failed or error occurred
+    if (!tripsRaw) {
       const { data: fallbackData, error: fallbackError } = await this.client
         .from('trips')
         .select('*')
         .order('created_at', { ascending: false })
 
       if (fallbackError) {
+        console.error('Fatal error fetching trips:', fallbackError)
         throw fallbackError
       }
-      return (fallbackData || []).map(this.mapTripRow)
+      tripsRaw = fallbackData || []
     }
 
-    return (data || []).map(this.mapTripRow)
+    // 3. Keep trips intact without mutating user_id
+
+    // 4. Enrich trips with profiles map if user_profile wasn't populated by join
+    const missingProfileUserIds = Array.from(
+      new Set(
+        (tripsRaw || [])
+          .filter((t: any) => t.user_id && !t.user_profile)
+          .map((t: any) => t.user_id),
+      ),
+    )
+
+    if (missingProfileUserIds.length > 0) {
+      try {
+        const { data: profs } = await this.client
+          .from('profiles')
+          .select('*')
+          .in('id', missingProfileUserIds)
+
+        if (profs && profs.length > 0) {
+          const profMap = new Map(profs.map((p: any) => [p.id, p]))
+          tripsRaw = (tripsRaw || []).map((t: any) => {
+            if (!t.user_profile && t.user_id && profMap.has(t.user_id)) {
+              return { ...t, user_profile: profMap.get(t.user_id) }
+            }
+            return t
+          })
+        }
+      } catch {
+        // non-blocking
+      }
+    }
+
+    return (tripsRaw || []).map(this.mapTripRow)
   }
 
   public async getTrip(id: string): Promise<Trip | null> {
-    const { data, error } = await this.client
-      .from('trips')
-      .select('*, user_profile:profiles(*)')
-      .eq('id', id)
-      .maybeSingle()
+    let tripRaw: any = null
 
-    if (error) {
-      console.error('Error getting trip with profile, fallbacking to direct select:', error)
+    try {
+      const { data, error } = await this.client
+        .from('trips')
+        .select('*, user_profile:profiles(*)')
+        .eq('id', id)
+        .maybeSingle()
+
+      if (!error && data) {
+        tripRaw = data
+      }
+    } catch {
+      // fallback
+    }
+
+    if (!tripRaw) {
       const { data: fallbackData, error: fallbackErr } = await this.client
         .from('trips')
         .select('*')
@@ -54,10 +111,28 @@ class SupabaseStorageService {
         .maybeSingle()
 
       if (fallbackErr) throw fallbackErr
-      return fallbackData ? this.mapTripRow(fallbackData) : null
+      tripRaw = fallbackData
     }
 
-    return data ? this.mapTripRow(data) : null
+    if (!tripRaw) return null
+
+    // If trip lacks user_profile but has user_id, enrich
+    if (tripRaw.user_id && !tripRaw.user_profile) {
+      try {
+        const { data: prof } = await this.client
+          .from('profiles')
+          .select('*')
+          .eq('id', tripRaw.user_id)
+          .maybeSingle()
+        if (prof) {
+          tripRaw.user_profile = prof
+        }
+      } catch {
+        // non-blocking
+      }
+    }
+
+    return this.mapTripRow(tripRaw)
   }
 
   public async createTrip(
@@ -67,6 +142,19 @@ class SupabaseStorageService {
       total_amount?: number
     },
   ): Promise<Trip> {
+    // Determine user_id: explicit or current authenticated user
+    let assignedUserId = tripData.user_id
+    if (!assignedUserId) {
+      try {
+        const { data: authData } = await supabase.auth.getUser()
+        if (authData?.user?.id) {
+          assignedUserId = authData.user.id
+        }
+      } catch {
+        // ignore
+      }
+    }
+
     const payload: Record<string, unknown> = {
       destination: tripData.destination,
       start_date: tripData.start_date,
@@ -79,8 +167,8 @@ class SupabaseStorageService {
     }
 
     if (tripData.id) payload.id = tripData.id
-    if (tripData.user_id && this.isValidUuid(tripData.user_id)) {
-      payload.user_id = tripData.user_id
+    if (assignedUserId && this.isValidUuid(assignedUserId)) {
+      payload.user_id = assignedUserId
     }
 
     const { data, error } = await this.client.from('trips').insert(payload).select().single()

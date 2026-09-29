@@ -75,11 +75,13 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/hooks/use-toast'
+import { useAuth } from '@/hooks/use-auth'
 
 export default function TripDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { toast } = useToast()
+  const { user, loading: authLoading } = useAuth()
 
   const [trip, setTrip] = useState<Trip | null>(null)
   const [expenses, setExpenses] = useState<Expense[]>([])
@@ -161,13 +163,19 @@ export default function TripDetailPage() {
 
   const loadTripData = async () => {
     if (!id) return
+    if (!user) {
+      navigate('/login', { replace: true })
+      return
+    }
+
     setLoading(true)
     try {
       const t = await storageService.getTrip(id)
       if (!t) {
         toast({
           title: 'Viagem não encontrada',
-          description: 'O identificador solicitado não existe.',
+          description:
+            'O identificador solicitado não existe ou você não possui permissão para acessá-lo.',
           variant: 'destructive',
         })
         navigate('/')
@@ -186,14 +194,26 @@ export default function TripDetailPage() {
       setEditMotivo(t.motivo)
       setEditStatus(t.status)
       setNewExpDate(t.start_date)
+    } catch (err: any) {
+      console.error('Falha ao carregar detalhes da viagem:', err)
+      toast({
+        title: 'Erro ao carregar viagem',
+        description: `Não foi possível carregar os detalhes: ${err?.message || 'erro de conexão'}`,
+        variant: 'destructive',
+      })
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
+    if (authLoading) return
+    if (!user) {
+      navigate('/login', { replace: true })
+      return
+    }
     loadTripData()
-  }, [id])
+  }, [authLoading, user?.id, id])
 
   const handleOpenJustify = (rule: AuditEvaluationRule) => {
     setJustifyingRule(rule)
@@ -426,7 +446,7 @@ export default function TripDetailPage() {
     }
   }
 
-  if (loading || !trip) {
+  if (authLoading || loading || !trip) {
     return (
       <div className="p-12 text-center text-slate-500">
         Carregando detalhes da viagem e executando motor de auditoria...

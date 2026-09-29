@@ -55,7 +55,7 @@ import { useAuth } from '@/hooks/use-auth'
 export default function Index() {
   const { toast } = useToast()
   const navigate = useNavigate()
-  const { user } = useAuth()
+  const { user, loading: authLoading } = useAuth()
   const [trips, setTrips] = useState<Trip[]>([])
   const [loading, setLoading] = useState(true)
   const [metrics, setMetrics] = useState({
@@ -74,20 +74,41 @@ export default function Index() {
   const [isDeletingTrip, setIsDeletingTrip] = useState(false)
 
   const loadData = async () => {
+    if (!user) {
+      navigate('/login', { replace: true })
+      return
+    }
+
     setLoading(true)
     try {
       const allTrips = await storageService.listTrips()
       const m = await storageService.getDashboardMetrics()
       setTrips(allTrips)
       setMetrics(m)
+    } catch (err: any) {
+      console.error('Falha ao carregar viagens no Dashboard:', err)
+      const errorMsg = err?.message || 'Erro de comunicação com o servidor'
+      toast({
+        title: 'Erro ao carregar viagens',
+        description: `Não foi possível carregar suas viagens: ${errorMsg}`,
+        variant: 'destructive',
+      })
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
+    // Only trigger query after auth state is resolved
+    if (authLoading) return
+
+    if (!user) {
+      navigate('/login', { replace: true })
+      return
+    }
+
     loadData()
-  }, [])
+  }, [authLoading, user?.id])
 
   // Extract unique month/years for period filtering based on trip start_date (regra virada de mês)
   const periodOptions = useMemo(() => {
@@ -330,7 +351,7 @@ export default function Index() {
         </div>
 
         {/* Table / List */}
-        {loading ? (
+        {authLoading || loading ? (
           <div className="p-12 text-center text-sm text-slate-500">
             Carregando viagens corporativas...
           </div>

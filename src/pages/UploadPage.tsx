@@ -34,6 +34,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useToast } from '@/hooks/use-toast'
+import { useAuth } from '@/hooks/use-auth'
 
 interface QueueFile {
   id: string
@@ -59,6 +60,7 @@ interface AiTripSuggestion {
 export default function UploadPage() {
   const navigate = useNavigate()
   const { toast } = useToast()
+  const { user, loading: authLoading } = useAuth()
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [queue, setQueue] = useState<QueueFile[]>([])
@@ -71,8 +73,18 @@ export default function UploadPage() {
   const [aiSuggestions, setAiSuggestions] = useState<AiTripSuggestion[]>([])
 
   useEffect(() => {
-    storageService.listTrips().then(setExistingTrips)
-  }, [])
+    if (authLoading) return
+    if (!user) {
+      navigate('/login', { replace: true })
+      return
+    }
+    storageService
+      .listTrips()
+      .then(setExistingTrips)
+      .catch((err) => {
+        console.error('Falha ao carregar viagens para upload:', err)
+      })
+  }, [authLoading, user?.id])
 
   const handleFilesSelected = (files: FileList | null) => {
     if (!files || files.length === 0) return

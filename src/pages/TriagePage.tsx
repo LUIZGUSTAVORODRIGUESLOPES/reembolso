@@ -43,12 +43,14 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { useToast } from '@/hooks/use-toast'
+import { useAuth } from '@/hooks/use-auth'
 import { CreateTripModal } from '@/components/CreateTripModal'
 import { DocumentViewer } from '@/components/DocumentViewer'
 
 export default function TriagePage() {
   const navigate = useNavigate()
   const { toast } = useToast()
+  const { user, loading: authLoading } = useAuth()
 
   const [expenses, setExpenses] = useState<Expense[]>([])
   const [trips, setTrips] = useState<Trip[]>([])
@@ -72,6 +74,11 @@ export default function TriagePage() {
   const [createTripOpen, setCreateTripOpen] = useState(false)
 
   const loadData = async () => {
+    if (!user) {
+      navigate('/login', { replace: true })
+      return
+    }
+
     setLoading(true)
     try {
       const allTrips = await storageService.listTrips()
@@ -89,14 +96,26 @@ export default function TriagePage() {
       setTrips(allTrips)
       setExpenses(listToReview)
       setCurrentIndex(0)
+    } catch (err: any) {
+      console.error('Falha ao carregar dados da triagem:', err)
+      toast({
+        title: 'Erro ao carregar triagem',
+        description: `Não foi possível carregar os comprovantes: ${err?.message || 'erro de conexão'}`,
+        variant: 'destructive',
+      })
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
+    if (authLoading) return
+    if (!user) {
+      navigate('/login', { replace: true })
+      return
+    }
     loadData()
-  }, [])
+  }, [authLoading, user?.id])
 
   // Sync current expense to form inputs
   const currentExpense = expenses[currentIndex] || null
@@ -273,7 +292,7 @@ export default function TriagePage() {
     }
   }
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <div className="p-12 text-center text-slate-500">
         Carregando comprovantes para conferência OCR...

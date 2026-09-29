@@ -53,7 +53,7 @@ import { useAuth } from '@/hooks/use-auth'
 export default function ReportsPage() {
   const navigate = useNavigate()
   const { toast } = useToast()
-  const { user, profile } = useAuth()
+  const { user, profile, loading: authLoading } = useAuth()
 
   const [trips, setTrips] = useState<Trip[]>([])
   const [loading, setLoading] = useState(true)
@@ -78,18 +78,35 @@ export default function ReportsPage() {
   const [emailSentSuccess, setEmailSentSuccess] = useState(false)
 
   const loadTrips = async () => {
+    if (!user) {
+      navigate('/login', { replace: true })
+      return
+    }
+
     setLoading(true)
     try {
       const all = await storageService.listTrips()
       setTrips(all)
+    } catch (err: any) {
+      console.error('Falha ao carregar viagens em relatórios:', err)
+      toast({
+        title: 'Erro ao carregar relatórios',
+        description: `Não foi possível carregar as viagens: ${err?.message || 'erro de conexão'}`,
+        variant: 'destructive',
+      })
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
+    if (authLoading) return
+    if (!user) {
+      navigate('/login', { replace: true })
+      return
+    }
     loadTrips()
-  }, [])
+  }, [authLoading, user?.id])
 
   const handleOpenPackageModal = async (trip: Trip) => {
     setSelectedTrip(trip)
@@ -246,7 +263,7 @@ export default function ReportsPage() {
 
       {/* Trips list ready for packaging */}
       <div className="space-y-3">
-        {loading ? (
+        {authLoading || loading ? (
           <div className="p-12 text-center text-slate-500">
             Carregando viagens para prestação de contas...
           </div>

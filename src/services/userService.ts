@@ -6,29 +6,43 @@ export const userService = {
    * List all users with profile data and trips count
    */
   async listUsers(): Promise<Profile[]> {
-    const { data: profiles, error } = await (supabase as any)
-      .from('profiles')
-      .select('*')
-      .order('created_at', { ascending: true })
+    let profilesList: any[] = []
 
-    if (error) {
-      console.error('Erro ao listar usuários:', error)
-      throw error
+    try {
+      const { data: profiles, error } = await (supabase as any)
+        .from('profiles')
+        .select('*')
+        .order('created_at', { ascending: true })
+
+      if (!error && profiles) {
+        profilesList = profiles
+      } else {
+        console.warn('Erro ao listar usuários de profiles:', error)
+      }
+    } catch (err) {
+      console.warn('Exceção ao listar profiles:', err)
     }
 
-    // Also get trips count per user
-    const { data: trips } = await (supabase as any).from('trips').select('id, user_id')
-
+    // Also get trips count per user (and check orphan trips)
+    let orphanTripsCount = 0
     const countMap: Record<string, number> = {}
-    if (trips) {
-      for (const t of trips) {
-        if (t.user_id) {
-          countMap[t.user_id] = (countMap[t.user_id] || 0) + 1
+
+    try {
+      const { data: trips } = await (supabase as any).from('trips').select('id, user_id')
+      if (trips) {
+        for (const t of trips) {
+          if (t.user_id) {
+            countMap[t.user_id] = (countMap[t.user_id] || 0) + 1
+          } else {
+            orphanTripsCount++
+          }
         }
       }
+    } catch {
+      // non-blocking
     }
 
-    return (profiles || []).map((p: any) => ({
+    return profilesList.map((p: any) => ({
       id: p.id,
       email: p.email,
       full_name: p.full_name || p.email,
@@ -36,7 +50,8 @@ export const userService = {
       is_active: p.is_active ?? true,
       created_at: p.created_at,
       updated_at: p.updated_at,
-      trips_count: countMap[p.id] || 0,
+      // If user is admin and orphan trips exist, they manage those trips too
+      trips_count: (countMap[p.id] || 0) + (p.role === 'admin' ? orphanTripsCount : 0),
     }))
   },
 

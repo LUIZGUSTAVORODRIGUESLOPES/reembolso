@@ -40,7 +40,7 @@ import {
 import { Label } from '@/components/ui/label'
 
 export default function UsersPage() {
-  const { user: currentUser } = useAuth()
+  const { user: currentUser, loading: authLoading } = useAuth()
   const { toast } = useToast()
 
   const [users, setUsers] = useState<Profile[]>([])
@@ -75,8 +75,9 @@ export default function UsersPage() {
   }
 
   useEffect(() => {
+    if (authLoading) return
     loadUsers()
-  }, [])
+  }, [authLoading, currentUser?.id])
 
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault()

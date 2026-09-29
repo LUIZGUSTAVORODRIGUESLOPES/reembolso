@@ -64,6 +64,7 @@ function buildConsolidatedHtml(
   trip: Trip,
   expenses: Expense[],
   attachments: PreparedReceiptAttachment[],
+  collaboratorName?: string,
 ): string {
   const expensesHtml = expenses
     .map(
@@ -211,7 +212,7 @@ function buildConsolidatedHtml(
             <strong>Transporte Principal:</strong> ${trip.transport_type}
           </div>
           <div>
-            <strong>Colaborador:</strong> Carlos Ferreira (Matrícula Corp #4412)<br>
+            <strong>Colaborador Solicitante:</strong> ${collaboratorName || trip.user_profile?.full_name || 'Colaborador'}<br>
             <strong>Motivo da Viagem:</strong> ${trip.motivo}<br>
             <strong>Data do Fechamento:</strong> ${new Date().toLocaleDateString('pt-BR')}
           </div>
@@ -267,6 +268,7 @@ export async function exportConsolidatedReportPdf(
   trip: Trip,
   expenses: Expense[],
   onProgress?: (current: number, total: number, message: string) => void,
+  collaboratorName?: string,
 ): Promise<void> {
   const total = expenses.length
 
@@ -335,7 +337,7 @@ export async function exportConsolidatedReportPdf(
 
   onProgress?.(total, total, 'Montando documento final...')
 
-  const fullHtml = buildConsolidatedHtml(trip, expenses, attachments)
+  const fullHtml = buildConsolidatedHtml(trip, expenses, attachments, collaboratorName)
 
   if (printWindow && !printWindow.closed) {
     printWindow.document.open()

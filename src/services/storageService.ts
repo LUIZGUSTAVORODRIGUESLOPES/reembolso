@@ -18,23 +18,43 @@ class SupabaseStorageService {
   public async listTrips(): Promise<Trip[]> {
     const { data, error } = await this.client
       .from('trips')
-      .select('*')
+      .select('*, user_profile:profiles(*)')
       .order('created_at', { ascending: false })
 
     if (error) {
       console.error('Error fetching trips:', error)
-      throw error
+      // Fallback in case join fails or relations not yet reloaded in client
+      const { data: fallbackData, error: fallbackError } = await this.client
+        .from('trips')
+        .select('*')
+        .order('created_at', { ascending: false })
+
+      if (fallbackError) {
+        throw fallbackError
+      }
+      return (fallbackData || []).map(this.mapTripRow)
     }
 
     return (data || []).map(this.mapTripRow)
   }
 
   public async getTrip(id: string): Promise<Trip | null> {
-    const { data, error } = await this.client.from('trips').select('*').eq('id', id).maybeSingle()
+    const { data, error } = await this.client
+      .from('trips')
+      .select('*, user_profile:profiles(*)')
+      .eq('id', id)
+      .maybeSingle()
 
     if (error) {
-      console.error('Error getting trip:', error)
-      throw error
+      console.error('Error getting trip with profile, fallbacking to direct select:', error)
+      const { data: fallbackData, error: fallbackErr } = await this.client
+        .from('trips')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle()
+
+      if (fallbackErr) throw fallbackErr
+      return fallbackData ? this.mapTripRow(fallbackData) : null
     }
 
     return data ? this.mapTripRow(data) : null
@@ -861,6 +881,19 @@ class SupabaseStorageService {
   }
 
   private mapTripRow(row: any): Trip {
+    let user_profile = null
+    if (row.user_profile) {
+      user_profile = {
+        id: row.user_profile.id,
+        email: row.user_profile.email,
+        full_name: row.user_profile.full_name,
+        role: row.user_profile.role,
+        is_active: row.user_profile.is_active ?? true,
+        created_at: row.user_profile.created_at,
+        updated_at: row.user_profile.updated_at,
+      }
+    }
+
     return {
       id: String(row.id),
       user_id: row.user_id ? String(row.user_id) : '',
@@ -873,6 +906,7 @@ class SupabaseStorageService {
       notes: row.notes || '',
       motivo: String(row.motivo || ''),
       created_at: String(row.created_at || ''),
+      user_profile,
     }
   }
 

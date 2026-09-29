@@ -21,6 +21,7 @@ import {
 import { TransportType, Trip } from '@/types/database'
 import { storageService } from '@/services/storageService'
 import { useToast } from '@/hooks/use-toast'
+import { useAuth } from '@/hooks/use-auth'
 import { Plane, Car, CarFront, MoreHorizontal, Calendar, MapPin, Briefcase } from 'lucide-react'
 
 interface CreateTripModalProps {
@@ -31,6 +32,7 @@ interface CreateTripModalProps {
 
 export function CreateTripModal({ open, onOpenChange, onCreated }: CreateTripModalProps) {
   const { toast } = useToast()
+  const { user } = useAuth()
   const [loading, setLoading] = useState(false)
   const [destination, setDestination] = useState('')
   const [startDate, setStartDate] = useState('')
@@ -80,6 +82,7 @@ export function CreateTripModal({ open, onOpenChange, onCreated }: CreateTripMod
     setLoading(true)
     try {
       const newTrip = await storageService.createTrip({
+        user_id: user?.id,
         destination: destination.trim(),
         start_date: startDate,
         end_date: endDate,

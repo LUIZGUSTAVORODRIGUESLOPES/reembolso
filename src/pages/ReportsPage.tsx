@@ -48,10 +48,12 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Checkbox } from '@/components/ui/checkbox'
 import { useToast } from '@/hooks/use-toast'
+import { useAuth } from '@/hooks/use-auth'
 
 export default function ReportsPage() {
   const navigate = useNavigate()
   const { toast } = useToast()
+  const { user, profile } = useAuth()
 
   const [trips, setTrips] = useState<Trip[]>([])
   const [loading, setLoading] = useState(true)
@@ -159,9 +161,20 @@ export default function ReportsPage() {
     setPdfProgressText('Iniciando processamento dos comprovantes...')
 
     try {
-      await exportConsolidatedReportPdf(selectedTrip, tripExpenses, (current, total, message) => {
-        setPdfProgressText(`${message} (${Math.round((current / total) * 100)}%)`)
-      })
+      const collaboratorName =
+        selectedTrip.user_profile?.full_name ||
+        profile?.full_name ||
+        user?.user_metadata?.full_name ||
+        'Colaborador Solicitante'
+
+      await exportConsolidatedReportPdf(
+        selectedTrip,
+        tripExpenses,
+        (current, total, message) => {
+          setPdfProgressText(`${message} (${Math.round((current / total) * 100)}%)`)
+        },
+        collaboratorName,
+      )
       toast({
         title: 'Relatório consolidado gerado!',
         description:
@@ -182,6 +195,12 @@ export default function ReportsPage() {
 
   const handleOpenEmailModal = () => {
     if (!selectedTrip) return
+    const collaboratorName =
+      selectedTrip.user_profile?.full_name ||
+      profile?.full_name ||
+      user?.user_metadata?.full_name ||
+      'Colaborador Solicitante'
+
     setEmailSubject(
       `Prestação de Contas — ${selectedTrip.destination} (${formatDateRangeBR(
         selectedTrip.start_date,
@@ -189,7 +208,7 @@ export default function ReportsPage() {
       )})`,
     )
     setEmailBody(
-      `Prezada equipe de Controladoria e Contas a Pagar,\n\nEncaminho em anexo a prestação de contas consolidada referente ao deslocamento para ${selectedTrip.destination}, realizado no período de ${formatDateRangeBR(selectedTrip.start_date, selectedTrip.end_date)}.\n\nMotivo da Viagem: ${selectedTrip.motivo}\nTotal Solicitado: ${formatCurrencyBRL(selectedTrip.total_amount)}\nTotal de Comprovantes Auditados: ${tripExpenses.length}\n\nTodos os comprovantes foram conferidos via OCR e auditados pelo motor de compliance.\n\nAtenciosamente,\nCarlos Ferreira`,
+      `Prezada equipe de Controladoria e Contas a Pagar,\n\nEncaminho em anexo a prestação de contas consolidada referente ao deslocamento para ${selectedTrip.destination}, realizado no período de ${formatDateRangeBR(selectedTrip.start_date, selectedTrip.end_date)}.\n\nMotivo da Viagem: ${selectedTrip.motivo}\nTotal Solicitado: ${formatCurrencyBRL(selectedTrip.total_amount)}\nTotal de Comprovantes Auditados: ${tripExpenses.length}\n\nTodos os comprovantes foram conferidos via OCR e auditados pelo motor de compliance.\n\nAtenciosamente,\n${collaboratorName}`,
     )
     setEmailSentSuccess(false)
     setEmailModalOpen(true)
@@ -360,9 +379,13 @@ export default function ReportsPage() {
                       {formatDateRangeBR(selectedTrip.start_date, selectedTrip.end_date)}
                     </div>
                     <div>
-                      <strong>Motivo:</strong> {selectedTrip.motivo}
+                      <strong>Colaborador:</strong>{' '}
+                      {selectedTrip.user_profile?.full_name ||
+                        profile?.full_name ||
+                        user?.user_metadata?.full_name ||
+                        'Colaborador Solicitante'}
                       <br />
-                      <strong>Transporte:</strong> {selectedTrip.transport_type}
+                      <strong>Motivo:</strong> {selectedTrip.motivo}
                     </div>
                   </div>
                 </div>

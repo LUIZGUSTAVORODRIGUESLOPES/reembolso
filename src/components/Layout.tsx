@@ -11,30 +11,35 @@ import {
   Menu,
   X,
   ShieldCheck,
+  Shield,
   ChevronRight,
   LogOut,
+  Users,
 } from 'lucide-react'
 import { storageService } from '@/services/storageService'
 import { useToast } from '@/hooks/use-toast'
+import { useAuth } from '@/hooks/use-auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-
-const NAV_ITEMS = [
-  { path: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { path: '/trips', label: 'Viagens', icon: PlaneTakeoff },
-  { path: '/upload', label: 'Upload de Comprovantes', icon: UploadCloud },
-  { path: '/triage', label: 'Triagem & OCR', icon: FileCheck2 },
-  { path: '/reports', label: 'Relatórios & Prestação', icon: FileSpreadsheet },
-]
 
 export default function Layout() {
   const location = useLocation()
   const navigate = useNavigate()
   const { toast } = useToast()
+  const { user, profile, isAdmin, signOut } = useAuth()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [activeAlertsCount, setActiveAlertsCount] = useState<number>(0)
   const [searchQuery, setSearchQuery] = useState('')
+
+  const navItems = [
+    { path: '/', label: 'Dashboard', icon: LayoutDashboard },
+    { path: '/trips', label: 'Viagens', icon: PlaneTakeoff },
+    { path: '/upload', label: 'Upload de Comprovantes', icon: UploadCloud },
+    { path: '/triage', label: 'Triagem & OCR', icon: FileCheck2 },
+    { path: '/reports', label: 'Relatórios & Prestação', icon: FileSpreadsheet },
+    ...(isAdmin ? [{ path: '/usuarios', label: 'Gestão de Usuários', icon: Users }] : []),
+  ]
 
   const refreshAlertCount = async () => {
     try {
@@ -65,6 +70,7 @@ export default function Layout() {
     if (path === '/upload') return ['Dashboard', 'Upload em Lote']
     if (path === '/triage') return ['Dashboard', 'Triagem & OCR']
     if (path === '/reports') return ['Dashboard', 'Relatórios']
+    if (path === '/usuarios') return ['Dashboard', 'Gestão de Usuários']
     return ['Dashboard']
   }
 
@@ -76,8 +82,29 @@ export default function Layout() {
     if (path === '/upload') return 'Upload em Lote com OCR'
     if (path === '/triage') return 'Triagem & Conferência'
     if (path === '/reports') return 'Prestação de Contas & Relatórios'
+    if (path === '/usuarios') return 'Controle de Usuários e Perfis'
     return 'Reembolso.ai'
   }
+
+  const handleSignOut = async () => {
+    await signOut()
+    toast({
+      title: 'Sessão encerrada',
+      description: 'Você saiu da sua conta corporativa com segurança.',
+    })
+    navigate('/login')
+  }
+
+  const userName =
+    profile?.full_name || user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'Usuário'
+  const userEmail = profile?.email || user?.email || 'usuario@empresa.com.br'
+  const initials =
+    userName
+      .split(' ')
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((n: string) => n[0].toUpperCase())
+      .join('') || 'U'
 
   return (
     <div className="min-h-screen bg-[#f8fafc] flex flex-col text-slate-900">
@@ -127,7 +154,7 @@ export default function Layout() {
               Principal
             </div>
 
-            {NAV_ITEMS.map((item) => {
+            {navItems.map((item) => {
               const Icon = item.icon
               const isActive =
                 item.path === '/'
@@ -154,6 +181,12 @@ export default function Layout() {
                     className={`w-4 h-4 shrink-0 ${isActive ? 'text-blue-400' : 'text-slate-400'}`}
                   />
                   <span>{item.label}</span>
+
+                  {item.path === '/usuarios' && (
+                    <span className="ml-auto text-[10px] bg-blue-500/20 text-blue-300 font-semibold px-1.5 py-0.5 rounded border border-blue-500/30">
+                      Admin
+                    </span>
+                  )}
 
                   {item.path === '/triage' && (
                     <span className="ml-auto text-[10px] bg-blue-500/20 text-blue-300 font-semibold px-1.5 py-0.5 rounded border border-blue-500/30">
@@ -203,23 +236,32 @@ export default function Layout() {
           <div className="p-3 border-t border-slate-800 bg-slate-900/50">
             <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-800/50 transition-colors">
               <div className="w-9 h-9 rounded-full bg-blue-700/50 text-blue-200 border border-blue-500/40 font-bold text-xs flex items-center justify-center shrink-0">
-                CF
+                {initials}
               </div>
               <div className="min-w-0 flex-1">
-                <p className="text-xs font-semibold text-white truncate">Carlos Ferreira</p>
-                <p className="text-[11px] text-slate-400 truncate">auditoria@empresa.com.br</p>
+                <div className="flex items-center gap-1.5">
+                  <p className="text-xs font-semibold text-white truncate">{userName}</p>
+                </div>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <Badge
+                    variant="outline"
+                    className={`text-[9px] px-1.5 py-0 border-0 h-4 font-semibold ${
+                      isAdmin
+                        ? 'bg-blue-500/20 text-blue-300'
+                        : 'bg-emerald-500/20 text-emerald-300'
+                    }`}
+                  >
+                    {isAdmin ? 'Administrador' : 'Solicitante'}
+                  </Badge>
+                </div>
+                <p className="text-[10px] text-slate-400 truncate mt-0.5">{userEmail}</p>
               </div>
               <button
-                onClick={() =>
-                  toast({
-                    title: 'Sessão Corporativa',
-                    description: 'Ambiente seguro corporativo conectado.',
-                  })
-                }
-                title="Status da Conta"
-                className="text-slate-400 hover:text-white p-1 rounded"
+                onClick={handleSignOut}
+                title="Encerrar Sessão (Logout)"
+                className="text-slate-400 hover:text-red-400 p-1.5 rounded transition-colors"
               >
-                <LogOut className="w-3.5 h-3.5" />
+                <LogOut className="w-4 h-4" />
               </button>
             </div>
           </div>

@@ -543,6 +543,16 @@ export default function TripDetailPage() {
               </span>
             </div>
 
+            <div className="flex items-center gap-2 text-xs text-slate-600 pt-0.5">
+              <span>Colaborador Solicitante:</span>
+              <span className="font-semibold text-slate-900 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
+                {trip.user_profile?.full_name || 'Colaborador Corporativo'}
+              </span>
+              {trip.user_profile?.email && (
+                <span className="text-[11px] text-slate-400">({trip.user_profile.email})</span>
+              )}
+            </div>
+
             <p className="text-xs text-slate-600 max-w-2xl pt-1">
               <strong>Motivo Corporativo:</strong> {trip.motivo}
             </p>

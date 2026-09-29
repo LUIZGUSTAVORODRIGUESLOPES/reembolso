@@ -50,10 +50,12 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { useToast } from '@/hooks/use-toast'
+import { useAuth } from '@/hooks/use-auth'
 
 export default function Index() {
   const { toast } = useToast()
   const navigate = useNavigate()
+  const { user } = useAuth()
   const [trips, setTrips] = useState<Trip[]>([])
   const [loading, setLoading] = useState(true)
   const [metrics, setMetrics] = useState({
@@ -359,6 +361,7 @@ export default function Index() {
                 <thead className="bg-slate-50 border-b border-slate-200 uppercase text-[11px] font-semibold text-slate-500 tracking-wider">
                   <tr>
                     <th className="py-3 px-4">Destino</th>
+                    <th className="py-3 px-4">Colaborador</th>
                     <th className="py-3 px-4">Período</th>
                     <th className="py-3 px-4">Transporte</th>
                     <th className="py-3 px-4 text-right">Total Acumulado</th>
@@ -389,6 +392,18 @@ export default function Index() {
                               </div>
                             </div>
                           </div>
+                        </td>
+
+                        <td className="py-3.5 px-4 text-slate-700">
+                          <div className="text-xs font-medium text-slate-900">
+                            {trip.user_profile?.full_name ||
+                              (trip.user_id === user?.id ? 'Você' : 'Colaborador')}
+                          </div>
+                          {trip.user_profile?.email && (
+                            <div className="text-[10px] text-slate-400">
+                              {trip.user_profile.email}
+                            </div>
+                          )}
                         </td>
 
                         <td className="py-3.5 px-4 text-slate-600">
@@ -477,7 +492,10 @@ export default function Index() {
                         <div>
                           <h4 className="font-bold text-slate-900 text-sm">{trip.destination}</h4>
                           <p className="text-xs text-slate-500">
-                            {formatDateRangeBR(trip.start_date, trip.end_date)}
+                            {formatDateRangeBR(trip.start_date, trip.end_date)} •{' '}
+                            <span className="font-medium text-slate-700">
+                              {trip.user_profile?.full_name || 'Colaborador'}
+                            </span>
                           </p>
                         </div>
                       </div>

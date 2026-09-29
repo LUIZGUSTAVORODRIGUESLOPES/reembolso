@@ -24,6 +24,19 @@ export type AuditFlag =
   | 'sem_categoria_definida'
   | string
 
+export type UserRole = 'admin' | 'solicitante'
+
+export interface Profile {
+  id: string
+  email: string
+  full_name: string
+  role: UserRole
+  is_active: boolean
+  created_at: string
+  updated_at: string
+  trips_count?: number
+}
+
 export interface Trip {
   id: string
   user_id: string
@@ -36,6 +49,7 @@ export interface Trip {
   notes?: string
   motivo: string
   created_at: string
+  user_profile?: Profile | null
 }
 
 export interface Expense {

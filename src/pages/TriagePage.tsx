@@ -1,14 +1,9 @@
 import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  ZoomIn,
-  ZoomOut,
-  RotateCw,
-  Maximize2,
   Trash2,
   Save,
   ArrowRight,
-  ArrowLeft,
   AlertTriangle,
   CheckCircle2,
   Calendar,
@@ -16,7 +11,6 @@ import {
   FileText,
   DollarSign,
   Briefcase,
-  Layers,
   ChevronLeft,
   ChevronRight,
   ShieldCheck,
@@ -48,6 +42,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { useToast } from '@/hooks/use-toast'
 import { CreateTripModal } from '@/components/CreateTripModal'
+import { DocumentViewer } from '@/components/DocumentViewer'
 
 export default function TriagePage() {
   const navigate = useNavigate()
@@ -58,9 +53,7 @@ export default function TriagePage() {
   const [currentIndex, setCurrentIndex] = useState(0)
   const [loading, setLoading] = useState(true)
 
-  // Document Viewer state
-  const [zoom, setZoom] = useState(100)
-  const [rotation, setRotation] = useState(0)
+  // Mobile navigation tab state
   const [activeTabMobile, setActiveTabMobile] = useState<'document' | 'form'>('document')
 
   // Form edit state for current expense
@@ -107,14 +100,8 @@ export default function TriagePage() {
       setCategory(currentExpense.category || 'outros')
       setAmountStr(String(currentExpense.amount || '0'))
       setAssignedTripId(currentExpense.trip_id || (trips[0]?.id ?? ''))
-      setZoom(100)
-      setRotation(0)
     }
   }, [currentIndex, currentExpense, trips])
-
-  const handleZoomIn = () => setZoom((prev) => Math.min(prev + 25, 200))
-  const handleZoomOut = () => setZoom((prev) => Math.max(prev - 25, 50))
-  const handleRotate = () => setRotation((prev) => (prev + 90) % 360)
 
   // Duplicate match details if flagged
   const isDuplicate = currentExpense?.audit_flags?.includes('comprovante_duplicado') || false
@@ -329,79 +316,12 @@ export default function TriagePage() {
             </div>
           )}
 
-          {/* Document Viewer Frame */}
-          <Card className="border border-slate-200 bg-white overflow-hidden shadow-sm">
-            {/* Viewer Toolbar */}
-            <div className="bg-slate-100/80 border-b border-slate-200 px-3 py-2 flex items-center justify-between text-xs text-slate-700">
-              <div className="flex items-center gap-1">
-                <span className="font-semibold text-slate-800 truncate max-w-[180px]">
-                  {currentExpense.file_name}
-                </span>
-                <span className="text-slate-400">|</span>
-                <span className="text-[11px] text-slate-500">Página 1 de 1</span>
-              </div>
-
-              <div className="flex items-center gap-1.5">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleZoomOut}
-                  className="h-7 w-7 p-0"
-                  title="Diminuir zoom"
-                >
-                  <ZoomOut className="w-3.5 h-3.5" />
-                </Button>
-                <span className="text-[11px] font-bold tabular-nums w-10 text-center">{zoom}%</span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleZoomIn}
-                  className="h-7 w-7 p-0"
-                  title="Aumentar zoom"
-                >
-                  <ZoomIn className="w-3.5 h-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleRotate}
-                  className="h-7 w-7 p-0"
-                  title="Rotacionar 90°"
-                >
-                  <RotateCw className="w-3.5 h-3.5" />
-                </Button>
-              </div>
-            </div>
-
-            {/* Document Paper Display Area */}
-            <div className="bg-slate-200/60 p-4 sm:p-6 min-h-[480px] max-h-[640px] flex items-center justify-center overflow-auto">
-              <div
-                className="bg-white rounded shadow-lg border border-slate-300 transition-transform duration-200 ease-out origin-center"
-                style={{
-                  transform: `scale(${zoom / 100}) rotate(${rotation}deg)`,
-                }}
-              >
-                <img
-                  src={currentExpense.file_url}
-                  alt={`Comprovante ${currentExpense.file_name}`}
-                  className="max-w-[420px] w-full h-auto object-contain select-none"
-                  draggable={false}
-                />
-              </div>
-            </div>
-
-            {/* OCR raw text snippet */}
-            {currentExpense.ocr_raw_text && (
-              <div className="bg-slate-50 border-t border-slate-200 p-3 text-[11px] text-slate-500 font-mono">
-                <span className="font-bold text-slate-700 block mb-0.5">
-                  TEXTO EXTRAÍDO DO COMPROVANTE (OCR REAL):
-                </span>
-                <p className="line-clamp-3 text-slate-600 whitespace-pre-line">
-                  {currentExpense.ocr_raw_text}
-                </p>
-              </div>
-            )}
-          </Card>
+          {/* Document Viewer Frame with full PDF / Image / Fallback support */}
+          <DocumentViewer
+            fileName={currentExpense.file_name}
+            fileUrl={currentExpense.file_url}
+            ocrRawText={currentExpense.ocr_raw_text}
+          />
         </div>
 
         {/* RIGHT PANEL: Confirmation Form */}

@@ -12,10 +12,7 @@ import {
   X,
   ShieldCheck,
   ChevronRight,
-  Database,
-  RefreshCw,
   LogOut,
-  ExternalLink,
 } from 'lucide-react'
 import { storageService } from '@/services/storageService'
 import { useToast } from '@/hooks/use-toast'
@@ -59,16 +56,6 @@ export default function Layout() {
     setMobileOpen(false)
   }, [location.pathname])
 
-  const handleResetData = () => {
-    storageService.resetToSeed()
-    toast({
-      title: 'Dados restaurados',
-      description: 'O banco de demonstração foi restaurado com as 3 viagens padrão.',
-    })
-    refreshAlertCount()
-    window.location.reload()
-  }
-
   // Generate dynamic breadcrumb
   const getBreadcrumb = () => {
     const path = location.pathname
@@ -94,32 +81,6 @@ export default function Layout() {
 
   return (
     <div className="min-h-screen bg-[#f8fafc] flex flex-col text-slate-900">
-      {/* Top Banner Notice: Demo mode explainer */}
-      <div className="bg-slate-900 text-slate-300 text-xs px-4 py-1.5 flex items-center justify-between border-b border-slate-800">
-        <div className="flex items-center gap-2 overflow-hidden">
-          <Database className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-          <span className="truncate">
-            <strong className="text-white">Modo Demonstração Ativo:</strong> Os dados estão
-            persistidos em localStorage local (schema Supabase 1:1) até a conexão ao banco em nuvem.
-          </span>
-        </div>
-        <div className="flex items-center gap-3 shrink-0 ml-2">
-          <button
-            onClick={handleResetData}
-            title="Restaurar as 3 viagens de demonstração"
-            className="text-slate-400 hover:text-white inline-flex items-center gap-1 transition-colors underline cursor-pointer"
-          >
-            <RefreshCw className="w-3 h-3" />
-            <span className="hidden sm:inline">Restaurar Seed</span>
-          </button>
-          <span className="text-slate-600">|</span>
-          <span className="text-emerald-400 font-medium flex items-center gap-1">
-            <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-            Online
-          </span>
-        </div>
-      </div>
-
       <div className="flex flex-1 relative">
         {/* Mobile Drawer Overlay */}
         {mobileOpen && (

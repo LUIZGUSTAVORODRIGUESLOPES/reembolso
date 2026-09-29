@@ -1,3 +1,4 @@
+import { supabase } from '@/lib/supabase/client'
 import {
   Trip,
   Expense,
@@ -6,303 +7,36 @@ import {
   AuditEvaluationRule,
 } from '@/types/database'
 
-const STORAGE_KEYS = {
-  TRIPS: 'reembolso_trips_v1',
-  EXPENSES: 'reembolso_expenses_v1',
-  AUDIT_LOGS: 'reembolso_audit_logs_v1',
-  INITIALIZED: 'reembolso_initialized_v1',
-}
-
-// 3 Seed Trips
-const SEED_TRIPS: Trip[] = [
-  {
-    id: 'trip-sp-001',
-    user_id: 'user-default-01',
-    destination: 'São Paulo, SP',
-    start_date: '2025-03-10',
-    end_date: '2025-03-12',
-    transport_type: 'aéreo',
-    status: 'auditada',
-    total_amount: 2845.8,
-    motivo:
-      'Alinhamento estratégico com diretoria regional e visita a clientes chave na Av. Paulista',
-    notes: 'Acomodação reservada próximo à Paulista. Voos Gol Linhas Aéreas.',
-    created_at: '2025-03-08T10:00:00Z',
-  },
-  {
-    id: 'trip-cwb-002',
-    user_id: 'user-default-01',
-    destination: 'Curitiba, PR',
-    start_date: '2025-03-18',
-    end_date: '2025-03-19',
-    transport_type: 'carro_alugado',
-    status: 'com_pendencias',
-    total_amount: 512.4,
-    motivo:
-      'Visita técnica à planta fabril de São José dos Pinhais e auditoria de processos de expedição',
-    notes:
-      'Necessário verificar fatura de locação de veículo e recibo de pedágio que ainda não foram anexados.',
-    created_at: '2025-03-17T14:30:00Z',
-  },
-  {
-    id: 'trip-triage-003',
-    user_id: 'user-default-01',
-    destination: 'Belo Horizonte, MG',
-    start_date: '2025-03-24',
-    end_date: '2025-03-26',
-    transport_type: 'aéreo',
-    status: 'em_triagem',
-    total_amount: 1948.3,
-    motivo: 'Workshop de capacitação técnica de parceiros e homologação de software',
-    notes: 'Recibos enviados em lote pendentes de conferência pelo usuário.',
-    created_at: '2025-03-24T08:15:00Z',
-  },
-]
-
-// Seed Expenses
-const SEED_EXPENSES: Expense[] = [
-  // --- VIAGEM 1: São Paulo (100% auditada / conforme) ---
-  {
-    id: 'exp-sp-01',
-    trip_id: 'trip-sp-001',
-    file_name: 'passagem_aerea_gol_ida_volta_sp.pdf',
-    file_url: 'https://img.usecurling.com/p/800/600?q=abstract',
-    issue_date: '2025-03-10',
-    issue_time: '07:15',
-    category: 'transporte',
-    merchant_name: 'Gol Linhas Aéreas Inteligentes S.A.',
-    amount: 1420.5,
-    ocr_raw_text:
-      'GOL LINHAS AEREAS S/A - BILHETE DE PASSAGEM ELETRONICO - TRECHO SDU-CGH / CGH-SDU - TOTAL R$ 1.420,50 - CNPJ 07.575.651/0001-59',
-    is_verified: true,
-    audit_flags: [],
-    audit_status: 'conforme',
-    cnpj: '07.575.651/0001-59',
-  },
-  {
-    id: 'exp-sp-02',
-    trip_id: 'trip-sp-001',
-    file_name: 'hotel_ibis_paulista_2diarias.pdf',
-    file_url: 'https://img.usecurling.com/p/800/600?q=abstract',
-    issue_date: '2025-03-12',
-    issue_time: '11:00',
-    category: 'hospedagem',
-    merchant_name: 'Hotel Ibis São Paulo Paulista',
-    amount: 890.0,
-    ocr_raw_text:
-      'HOTEL IBIS PAULISTA - NOTA FISCAL DE SERVICOS - HOSPEDAGEM 2 DIARIAS - CHECKIN 10/03 CHECKOUT 12/03 - TOTAL R$ 890,00 - CNPJ 01.234.567/0001-89',
-    is_verified: true,
-    audit_flags: [],
-    audit_status: 'conforme',
-    cnpj: '01.234.567/0001-89',
-  },
-  {
-    id: 'exp-sp-03',
-    trip_id: 'trip-sp-001',
-    file_name: 'recibo_uber_aeroporto_congonhas.pdf',
-    file_url: 'https://img.usecurling.com/p/800/600?q=abstract',
-    issue_date: '2025-03-10',
-    issue_time: '08:45',
-    category: 'uber_taxi',
-    merchant_name: 'Uber do Brasil Tecnologia Ltda.',
-    amount: 68.4,
-    ocr_raw_text:
-      'UBER RECIBO - VIAGEM CONGONHAS PARA AV PAULISTA - TOTAL R$ 68,40 - MOTORISTA CLAUDIO - CNPJ 17.895.646/0001-87',
-    is_verified: true,
-    audit_flags: [],
-    audit_status: 'conforme',
-    cnpj: '17.895.646/0001-87',
-  },
-  {
-    id: 'exp-sp-04',
-    trip_id: 'trip-sp-001',
-    file_name: 'recibo_uber_retorno_congonhas.pdf',
-    file_url: 'https://img.usecurling.com/p/800/600?q=abstract',
-    issue_date: '2025-03-12',
-    issue_time: '17:30',
-    category: 'uber_taxi',
-    merchant_name: 'Uber do Brasil Tecnologia Ltda.',
-    amount: 74.9,
-    ocr_raw_text:
-      'UBER RECIBO - VIAGEM AV PAULISTA PARA CONGONHAS - TOTAL R$ 74,90 - CNPJ 17.895.646/0001-87',
-    is_verified: true,
-    audit_flags: [],
-    audit_status: 'conforme',
-    cnpj: '17.895.646/0001-87',
-  },
-  {
-    id: 'exp-sp-05',
-    trip_id: 'trip-sp-001',
-    file_name: 'restaurante_sabor_mineiro_jantar.pdf',
-    file_url: 'https://img.usecurling.com/p/800/600?q=abstract',
-    issue_date: '2025-03-11',
-    issue_time: '20:15',
-    category: 'alimentacao',
-    merchant_name: 'Restaurante Sabor Mineiro',
-    amount: 392.0,
-    ocr_raw_text:
-      'RESTAURANTE SABOR MINEIRO LTDA - NFC-e - REFEICAO EXECUTIVA E BEBIDAS - VALOR TOTAL R$ 392,00 - CNPJ 12.987.654/0001-33',
-    is_verified: true,
-    audit_flags: [],
-    audit_status: 'conforme',
-    cnpj: '12.987.654/0001-33',
-  },
-
-  // --- VIAGEM 2: Curitiba (com pendências de transporte / aluguel) ---
-  {
-    id: 'exp-cwb-01',
-    trip_id: 'trip-cwb-002',
-    file_name: 'posto_ipiranga_abastecimento_cwb.pdf',
-    file_url: 'https://img.usecurling.com/p/800/600?q=abstract',
-    issue_date: '2025-03-18',
-    issue_time: '10:20',
-    category: 'combustivel',
-    merchant_name: 'Posto Ipiranga Estrela do Sul',
-    amount: 220.0,
-    ocr_raw_text:
-      'POSTO IPIRANGA - AUTO POSTO ESTRELA DO SUL LTDA - GASOLINA ADITIVADA 38.0L - TOTAL R$ 220,00 - CNPJ 33.123.456/0001-77',
-    is_verified: true,
-    audit_flags: ['falta_comprovante_aluguel'],
-    audit_status: 'pendente',
-    cnpj: '33.123.456/0001-77',
-  },
-  {
-    id: 'exp-cwb-02',
-    trip_id: 'trip-cwb-002',
-    file_name: 'almoco_churrascaria_curitiba.pdf',
-    file_url: 'https://img.usecurling.com/p/800/600?q=abstract',
-    issue_date: '2025-03-18',
-    issue_time: '13:00',
-    category: 'alimentacao',
-    merchant_name: 'Churrascaria Batel Grill',
-    amount: 195.0,
-    ocr_raw_text:
-      'BATEL GRILL REFEICOES LTDA - NFC-e BUFFET COMPLETO - TOTAL R$ 195,00 - CNPJ 04.981.233/0001-44',
-    is_verified: true,
-    audit_flags: [],
-    audit_status: 'conforme',
-    cnpj: '04.981.233/0001-44',
-  },
-  {
-    id: 'exp-cwb-03',
-    trip_id: 'trip-cwb-002',
-    file_name: 'estacionamento_central_cwb.pdf',
-    file_url: 'https://img.usecurling.com/p/800/600?q=abstract',
-    issue_date: '2025-03-19',
-    issue_time: '16:40',
-    category: 'estacionamento',
-    merchant_name: 'Estacionamento Central Plaza',
-    amount: 97.4,
-    ocr_raw_text:
-      'ESTACIONAMENTO CENTRAL PLAZA - DIARIA AVULSA - TOTAL R$ 97,40 - CNPJ 08.441.982/0001-12',
-    is_verified: true,
-    audit_flags: [],
-    audit_status: 'conforme',
-    cnpj: '08.441.982/0001-12',
-  },
-
-  // --- VIAGEM 3: Belo Horizonte (Em Triagem com recibo duplicado e recibos não verificados) ---
-  {
-    id: 'exp-triage-01',
-    trip_id: 'trip-triage-003',
-    file_name: 'passagem_voo_bh_ida.pdf',
-    file_url: 'https://img.usecurling.com/p/800/600?q=abstract',
-    issue_date: '2025-03-24',
-    issue_time: '06:30',
-    category: 'transporte',
-    merchant_name: 'Gol Linhas Aéreas Inteligentes S.A.',
-    amount: 920.0,
-    ocr_raw_text:
-      'GOL LINHAS AEREAS - VOO G3 1450 TRECHO GIG-CNF - VALOR TOTAL R$ 920,00 - CNPJ 07.575.651/0001-59',
-    is_verified: false,
-    audit_flags: ['falta_voo_retorno', 'voo_sem_transporte_aeroporto'],
-    audit_status: 'pendente',
-    cnpj: '07.575.651/0001-59',
-  },
-  {
-    id: 'exp-triage-02',
-    trip_id: 'trip-triage-003',
-    file_name: 'recibo_posto_ipiranga_bh_duplicado.pdf',
-    file_url: 'https://img.usecurling.com/p/800/600?q=abstract',
-    issue_date: '2025-03-18', // MESMA DATA e VALOR do exp-cwb-01 (duplicata detectada)
-    issue_time: '10:20',
-    category: 'combustivel',
-    merchant_name: 'Posto Ipiranga Estrela do Sul',
-    amount: 220.0,
-    ocr_raw_text:
-      'POSTO IPIRANGA - AUTO POSTO ESTRELA DO SUL LTDA - GASOLINA ADITIVADA 38.0L - TOTAL R$ 220,00 - CNPJ 33.123.456/0001-77',
-    is_verified: false,
-    audit_flags: ['comprovante_duplicado'],
-    audit_status: 'pendente',
-    cnpj: '33.123.456/0001-77',
-  },
-  {
-    id: 'exp-triage-03',
-    trip_id: 'trip-triage-003',
-    file_name: 'hotel_savassi_bh_estadia.pdf',
-    file_url: 'https://img.usecurling.com/p/800/600?q=abstract',
-    issue_date: '2025-03-26',
-    issue_time: '12:00',
-    category: 'hospedagem',
-    merchant_name: 'Hotel Savassi Belo Horizonte',
-    amount: 630.0,
-    ocr_raw_text:
-      'HOTEL SAVASSI BH - NFS-e - 2 DIARIAS STANDARD SINGLE - TOTAL R$ 630,00 - CNPJ 18.223.111/0001-90',
-    is_verified: false,
-    audit_flags: [],
-    audit_status: 'pendente',
-    cnpj: '18.223.111/0001-90',
-  },
-  {
-    id: 'exp-triage-04',
-    trip_id: 'trip-triage-003',
-    file_name: 'restaurante_dona_lucinha_almoco.pdf',
-    file_url: 'https://img.usecurling.com/p/800/600?q=abstract',
-    issue_date: '2025-03-25',
-    issue_time: '13:30',
-    category: 'alimentacao',
-    merchant_name: 'Restaurante Dona Lucinha BH',
-    amount: 178.3,
-    ocr_raw_text:
-      'DONA LUCINHA REFEICOES MINEIRAS - NFC-e - ALMOCO COLETIVO - TOTAL R$ 178,30 - CNPJ 21.094.887/0001-52',
-    is_verified: false,
-    audit_flags: [],
-    audit_status: 'pendente',
-    cnpj: '21.094.887/0001-52',
-  },
-]
-
-class LocalStorageService {
-  constructor() {
-    this.ensureInitialized()
-  }
-
-  private ensureInitialized() {
-    if (typeof window === 'undefined') return
-    const isInit = localStorage.getItem(STORAGE_KEYS.INITIALIZED)
-    if (!isInit) {
-      this.resetToSeed()
-    }
-  }
-
-  public resetToSeed() {
-    if (typeof window === 'undefined') return
-    localStorage.setItem(STORAGE_KEYS.TRIPS, JSON.stringify(SEED_TRIPS))
-    localStorage.setItem(STORAGE_KEYS.EXPENSES, JSON.stringify(SEED_EXPENSES))
-    localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify([]))
-    localStorage.setItem(STORAGE_KEYS.INITIALIZED, 'true')
+class SupabaseStorageService {
+  // Helper to cast supabase query builder when types.ts has empty schema
+  private get client(): any {
+    return supabase as any
   }
 
   // Trips CRUD
   public async listTrips(): Promise<Trip[]> {
-    this.ensureInitialized()
-    const raw = localStorage.getItem(STORAGE_KEYS.TRIPS)
-    return raw ? JSON.parse(raw) : []
+    const { data, error } = await this.client
+      .from('trips')
+      .select('*')
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.error('Error fetching trips:', error)
+      throw error
+    }
+
+    return (data || []).map(this.mapTripRow)
   }
 
   public async getTrip(id: string): Promise<Trip | null> {
-    const trips = await this.listTrips()
-    return trips.find((t) => t.id === id) || null
+    const { data, error } = await this.client.from('trips').select('*').eq('id', id).maybeSingle()
+
+    if (error) {
+      console.error('Error getting trip:', error)
+      throw error
+    }
+
+    return data ? this.mapTripRow(data) : null
   }
 
   public async createTrip(
@@ -312,10 +46,7 @@ class LocalStorageService {
       total_amount?: number
     },
   ): Promise<Trip> {
-    const trips = await this.listTrips()
-    const newTrip: Trip = {
-      id: tripData.id || `trip-${Date.now()}`,
-      user_id: tripData.user_id || 'user-default-01',
+    const payload: Record<string, unknown> = {
       destination: tripData.destination,
       start_date: tripData.start_date,
       end_date: tripData.end_date,
@@ -324,95 +55,190 @@ class LocalStorageService {
       total_amount: tripData.total_amount ?? 0,
       notes: tripData.notes || '',
       motivo: tripData.motivo || '',
-      created_at: new Date().toISOString(),
     }
-    trips.unshift(newTrip)
-    localStorage.setItem(STORAGE_KEYS.TRIPS, JSON.stringify(trips))
-    return newTrip
+
+    if (tripData.id) payload.id = tripData.id
+    if (tripData.user_id && this.isValidUuid(tripData.user_id)) {
+      payload.user_id = tripData.user_id
+    }
+
+    const { data, error } = await this.client.from('trips').insert(payload).select().single()
+
+    if (error) {
+      console.error('Error creating trip:', error)
+      throw error
+    }
+
+    return this.mapTripRow(data)
   }
 
   public async updateTrip(
     id: string,
     updates: Partial<Omit<Trip, 'id' | 'created_at'>>,
   ): Promise<Trip | null> {
-    const trips = await this.listTrips()
-    const index = trips.findIndex((t) => t.id === id)
-    if (index === -1) return null
+    const payload: Record<string, unknown> = { ...updates }
+    if (payload.user_id && !this.isValidUuid(String(payload.user_id))) {
+      delete payload.user_id
+    }
 
-    trips[index] = { ...trips[index], ...updates }
-    localStorage.setItem(STORAGE_KEYS.TRIPS, JSON.stringify(trips))
-    return trips[index]
+    const { data, error } = await this.client
+      .from('trips')
+      .update(payload)
+      .eq('id', id)
+      .select()
+      .single()
+
+    if (error) {
+      console.error('Error updating trip:', error)
+      throw error
+    }
+
+    return data ? this.mapTripRow(data) : null
+  }
+
+  public async deleteTrip(id: string): Promise<boolean> {
+    const { error } = await this.client.from('trips').delete().eq('id', id)
+    if (error) {
+      console.error('Error deleting trip:', error)
+      throw error
+    }
+    return true
   }
 
   public async recalculateTripTotal(tripId: string): Promise<number> {
     const expenses = await this.listExpenses(tripId)
     const sum = expenses.reduce((acc, curr) => acc + (curr.amount || 0), 0)
-    await this.updateTrip(tripId, { total_amount: Number(sum.toFixed(2)) })
-    return Number(sum.toFixed(2))
+    const rounded = Number(sum.toFixed(2))
+
+    await this.client.from('trips').update({ total_amount: rounded }).eq('id', tripId)
+
+    return rounded
   }
 
   // Expenses CRUD
   public async listExpenses(tripId?: string): Promise<Expense[]> {
-    this.ensureInitialized()
-    const raw = localStorage.getItem(STORAGE_KEYS.EXPENSES)
-    const all: Expense[] = raw ? JSON.parse(raw) : []
+    let query = this.client.from('expenses').select('*').order('issue_date', { ascending: false })
+
     if (tripId) {
-      return all.filter((e) => e.trip_id === tripId)
+      query = query.eq('trip_id', tripId)
     }
-    return all
+
+    const { data, error } = await query
+
+    if (error) {
+      console.error('Error listing expenses:', error)
+      throw error
+    }
+
+    return (data || []).map(this.mapExpenseRow)
   }
 
   public async getExpense(id: string): Promise<Expense | null> {
-    const expenses = await this.listExpenses()
-    return expenses.find((e) => e.id === id) || null
+    const { data, error } = await this.client
+      .from('expenses')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle()
+
+    if (error) {
+      console.error('Error getting expense:', error)
+      throw error
+    }
+
+    return data ? this.mapExpenseRow(data) : null
   }
 
   public async createExpense(expenseData: Omit<Expense, 'id'> & { id?: string }): Promise<Expense> {
-    const expenses = await this.listExpenses()
-    const newExp: Expense = {
-      ...expenseData,
-      id: expenseData.id || `exp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    const payload: Record<string, unknown> = {
+      trip_id:
+        expenseData.trip_id && this.isValidUuid(expenseData.trip_id) ? expenseData.trip_id : null,
+      file_url: expenseData.file_url || '',
+      file_name: expenseData.file_name,
+      issue_date: expenseData.issue_date,
+      issue_time: expenseData.issue_time || null,
+      category: expenseData.category,
+      merchant_name: expenseData.merchant_name,
+      amount: expenseData.amount ?? 0,
+      ocr_raw_text: expenseData.ocr_raw_text || null,
+      is_verified: expenseData.is_verified ?? false,
+      audit_flags: expenseData.audit_flags || [],
+      audit_status: expenseData.audit_status || 'pendente',
+      audit_justification: expenseData.audit_justification || null,
+      cnpj: expenseData.cnpj || null,
     }
-    expenses.unshift(newExp)
-    localStorage.setItem(STORAGE_KEYS.EXPENSES, JSON.stringify(expenses))
-    if (newExp.trip_id) {
-      await this.recalculateTripTotal(newExp.trip_id)
+
+    if (expenseData.id && this.isValidUuid(expenseData.id)) {
+      payload.id = expenseData.id
     }
-    return newExp
+
+    const { data, error } = await this.client.from('expenses').insert(payload).select().single()
+
+    if (error) {
+      console.error('Error creating expense:', error)
+      throw error
+    }
+
+    const created = this.mapExpenseRow(data)
+    if (created.trip_id) {
+      await this.recalculateTripTotal(created.trip_id)
+    }
+
+    return created
   }
 
   public async updateExpense(
     id: string,
     updates: Partial<Omit<Expense, 'id'>>,
   ): Promise<Expense | null> {
-    const expenses = await this.listExpenses()
-    const index = expenses.findIndex((e) => e.id === id)
-    if (index === -1) return null
+    // Look up previous trip_id to recalculate if changed
+    const current = await this.getExpense(id)
+    const oldTripId = current?.trip_id
 
-    const oldTripId = expenses[index].trip_id
-    expenses[index] = { ...expenses[index], ...updates }
-    localStorage.setItem(STORAGE_KEYS.EXPENSES, JSON.stringify(expenses))
+    const payload: Record<string, unknown> = { ...updates }
+    if ('trip_id' in payload) {
+      if (!payload.trip_id || !this.isValidUuid(String(payload.trip_id))) {
+        payload.trip_id = null
+      }
+    }
+
+    const { data, error } = await this.client
+      .from('expenses')
+      .update(payload)
+      .eq('id', id)
+      .select()
+      .single()
+
+    if (error) {
+      console.error('Error updating expense:', error)
+      throw error
+    }
+
+    const updated = data ? this.mapExpenseRow(data) : null
 
     if (oldTripId) {
       await this.recalculateTripTotal(oldTripId)
     }
-    if (expenses[index].trip_id && expenses[index].trip_id !== oldTripId) {
-      await this.recalculateTripTotal(expenses[index].trip_id)
+    if (updated?.trip_id && updated.trip_id !== oldTripId) {
+      await this.recalculateTripTotal(updated.trip_id)
     }
 
-    return expenses[index]
+    return updated
   }
 
   public async deleteExpense(id: string): Promise<boolean> {
-    const expenses = await this.listExpenses()
-    const target = expenses.find((e) => e.id === id)
-    if (!target) return false
+    const current = await this.getExpense(id)
+    const tripId = current?.trip_id
 
-    const filtered = expenses.filter((e) => e.id !== id)
-    localStorage.setItem(STORAGE_KEYS.EXPENSES, JSON.stringify(filtered))
-    if (target.trip_id) {
-      await this.recalculateTripTotal(target.trip_id)
+    const { error } = await this.client.from('expenses').delete().eq('id', id)
+    if (error) {
+      console.error('Error deleting expense:', error)
+      throw error
     }
+
+    if (tripId) {
+      await this.recalculateTripTotal(tripId)
+    }
+
     return true
   }
 
@@ -602,10 +428,24 @@ class LocalStorageService {
 
   // Audit Logs CRUD
   public async listAuditLogs(tripId: string): Promise<AuditRulesLog[]> {
-    this.ensureInitialized()
-    const raw = localStorage.getItem(STORAGE_KEYS.AUDIT_LOGS)
-    const all: AuditRulesLog[] = raw ? JSON.parse(raw) : []
-    return all.filter((l) => l.trip_id === tripId)
+    const { data, error } = await this.client
+      .from('audit_rules_log')
+      .select('*')
+      .eq('trip_id', tripId)
+      .order('created_at', { ascending: true })
+
+    if (error) {
+      console.error('Error listing audit logs:', error)
+      throw error
+    }
+
+    return (data || []).map((row: any) => ({
+      id: String(row.id),
+      trip_id: String(row.trip_id),
+      rule_key: String(row.rule_key),
+      status: row.status as 'pass' | 'warning' | 'justified',
+      message: String(row.message || ''),
+    }))
   }
 
   public async saveAuditLog(log: {
@@ -614,33 +454,88 @@ class LocalStorageService {
     status: 'pass' | 'warning' | 'justified'
     message: string
   }): Promise<AuditRulesLog> {
-    const raw = localStorage.getItem(STORAGE_KEYS.AUDIT_LOGS)
-    const all: AuditRulesLog[] = raw ? JSON.parse(raw) : []
+    // Check if an entry exists for this trip + rule_key
+    const { data: existing } = await this.client
+      .from('audit_rules_log')
+      .select('*')
+      .eq('trip_id', log.trip_id)
+      .eq('rule_key', log.rule_key)
+      .maybeSingle()
 
-    const index = all.findIndex((l) => l.trip_id === log.trip_id && l.rule_key === log.rule_key)
+    if (existing) {
+      const { data, error } = await this.client
+        .from('audit_rules_log')
+        .update({
+          status: log.status,
+          message: log.message,
+        })
+        .eq('id', existing.id)
+        .select()
+        .single()
 
-    const updatedLog: AuditRulesLog = {
-      id: index >= 0 ? all[index].id : `audit-log-${Date.now()}`,
-      trip_id: log.trip_id,
-      rule_key: log.rule_key,
-      status: log.status,
-      message: log.message,
-    }
+      if (error) {
+        console.error('Error updating audit log:', error)
+        throw error
+      }
 
-    if (index >= 0) {
-      all[index] = updatedLog
+      return {
+        id: String(data.id),
+        trip_id: String(data.trip_id),
+        rule_key: String(data.rule_key),
+        status: data.status,
+        message: String(data.message || ''),
+      }
     } else {
-      all.push(updatedLog)
-    }
+      const { data, error } = await this.client
+        .from('audit_rules_log')
+        .insert({
+          trip_id: log.trip_id,
+          rule_key: log.rule_key,
+          status: log.status,
+          message: log.message,
+        })
+        .select()
+        .single()
 
-    localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(all))
-    return updatedLog
+      if (error) {
+        console.error('Error inserting audit log:', error)
+        throw error
+      }
+
+      return {
+        id: String(data.id),
+        trip_id: String(data.trip_id),
+        rule_key: String(data.rule_key),
+        status: data.status,
+        message: String(data.message || ''),
+      }
+    }
   }
 
-  // Metrics helper for Dashboard
+  // Supabase Storage upload for receipts
+  public async uploadReceiptFile(file: File): Promise<string> {
+    const cleanFileName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_').toLowerCase()
+    const filePath = `${Date.now()}_${Math.random().toString(36).slice(2, 7)}_${cleanFileName}`
+
+    const { data, error } = await supabase.storage.from('comprovantes').upload(filePath, file, {
+      cacheControl: '3600',
+      upsert: false,
+      contentType: file.type || 'application/octet-stream',
+    })
+
+    if (error) {
+      console.warn('Storage upload error, using object path fallback:', error)
+      throw error
+    }
+
+    const { data: publicUrlData } = supabase.storage.from('comprovantes').getPublicUrl(data.path)
+
+    return publicUrlData.publicUrl
+  }
+
+  // Dashboard Metrics
   public async getDashboardMetrics() {
     const trips = await this.listTrips()
-    const expenses = await this.listExpenses()
 
     // Total a reembolsar: soma de todas as viagens em aberto (em_triagem, com_pendencias, auditada)
     const openTrips = trips.filter((t) =>
@@ -676,10 +571,51 @@ class LocalStorageService {
     )
 
     return {
-      totalToRefund,
+      totalToRefund: Number(totalToRefund.toFixed(2)),
       openTripsCount,
       activeAlertsCount,
-      totalReimbursedThisMonth,
+      totalReimbursedThisMonth: Number(totalReimbursedThisMonth.toFixed(2)),
+    }
+  }
+
+  // Helpers
+  private isValidUuid(str: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str)
+  }
+
+  private mapTripRow(row: any): Trip {
+    return {
+      id: String(row.id),
+      user_id: row.user_id ? String(row.user_id) : '',
+      destination: String(row.destination || ''),
+      start_date: String(row.start_date || ''),
+      end_date: String(row.end_date || ''),
+      transport_type: row.transport_type,
+      status: row.status,
+      total_amount: Number(row.total_amount || 0),
+      notes: row.notes || '',
+      motivo: String(row.motivo || ''),
+      created_at: String(row.created_at || ''),
+    }
+  }
+
+  private mapExpenseRow(row: any): Expense {
+    return {
+      id: String(row.id),
+      trip_id: row.trip_id ? String(row.trip_id) : null,
+      file_url: String(row.file_url || ''),
+      file_name: String(row.file_name || ''),
+      issue_date: String(row.issue_date || ''),
+      issue_time: row.issue_time || '',
+      category: row.category as ExpenseCategory,
+      merchant_name: String(row.merchant_name || ''),
+      amount: Number(row.amount || 0),
+      ocr_raw_text: row.ocr_raw_text || '',
+      is_verified: Boolean(row.is_verified),
+      audit_flags: Array.isArray(row.audit_flags) ? row.audit_flags : [],
+      audit_status: row.audit_status || 'pendente',
+      audit_justification: row.audit_justification || '',
+      cnpj: row.cnpj || '',
     }
   }
 }
@@ -693,4 +629,4 @@ function calculateDaysBetween(start: string, end: string): number {
   return diffDays || 1
 }
 
-export const storageService = new LocalStorageService()
+export const storageService = new SupabaseStorageService()

@@ -80,7 +80,6 @@ export function CreateTripModal({ open, onOpenChange, onCreated }: CreateTripMod
     setLoading(true)
     try {
       const newTrip = await storageService.createTrip({
-        user_id: 'user-default-01',
         destination: destination.trim(),
         start_date: startDate,
         end_date: endDate,

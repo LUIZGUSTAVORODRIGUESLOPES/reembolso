@@ -110,23 +110,6 @@ export default function UploadPage() {
     setIsDragging(false)
   }
 
-  // Pre-load sample files button for quick demo convenience
-  const handleLoadSampleBatch = () => {
-    const sampleFiles = [
-      new File(['dummy-content-1'], 'recibo_uber_aeroporto_congonhas.pdf', {
-        type: 'application/pdf',
-      }),
-      new File(['dummy-content-2'], 'hotel_ibis_estadia_sp.png', { type: 'image/png' }),
-      new File(['dummy-content-3'], 'restaurante_sabor_mineiro_almoco.jpg', { type: 'image/jpeg' }),
-      new File(['dummy-content-4'], 'posto_ipiranga_abastecimento.pdf', {
-        type: 'application/pdf',
-      }),
-    ]
-    const dataTransfer = new DataTransfer()
-    sampleFiles.forEach((f) => dataTransfer.items.add(f))
-    handleFilesSelected(dataTransfer.files)
-  }
-
   // Process all files with simulated OCR sequentially
   const processAllFiles = async () => {
     if (queue.length === 0 || isProcessing) return
@@ -276,54 +259,71 @@ export default function UploadPage() {
       return
     }
 
-    // Save each receipt as Expense (is_verified = false)
-    for (const item of readyItems) {
-      if (!item.extracted) continue
+    try {
+      // Save each receipt as Expense (is_verified = false)
+      for (const item of readyItems) {
+        if (!item.extracted) continue
 
-      let finalTripId = item.assignedTripId
-      if (finalTripId === 'new') {
-        // Create auto-trip
-        const createdTrip = await storageService.createTrip({
-          destination: 'Nova Viagem (Agrupamento IA)',
-          start_date: item.extracted.issue_date,
-          end_date: item.extracted.issue_date,
-          transport_type: item.extracted.category === 'transporte' ? 'aéreo' : 'outros',
-          status: 'em_triagem',
-          motivo: 'Processo gerado via upload em lote inteligente',
+        let uploadedFileUrl = item.extracted.file_url
+        // Upload actual file to Supabase Storage bucket 'comprovantes'
+        try {
+          uploadedFileUrl = await storageService.uploadReceiptFile(item.file)
+        } catch (uploadErr) {
+          console.warn('Storage upload error, using OCR preview fallback:', uploadErr)
+        }
+
+        let finalTripId = item.assignedTripId
+        if (finalTripId === 'new') {
+          // Create auto-trip
+          const createdTrip = await storageService.createTrip({
+            destination: 'Nova Viagem (Agrupamento IA)',
+            start_date: item.extracted.issue_date,
+            end_date: item.extracted.issue_date,
+            transport_type: item.extracted.category === 'transporte' ? 'aéreo' : 'outros',
+            status: 'em_triagem',
+            motivo: 'Processo gerado via upload em lote inteligente',
+          })
+          finalTripId = createdTrip.id
+        }
+
+        const auditFlags: string[] = []
+        if (item.duplicateMatch || item.keepDuplicate) {
+          auditFlags.push('comprovante_duplicado')
+        }
+
+        await storageService.createExpense({
+          trip_id: finalTripId,
+          file_name: item.file.name,
+          file_url: uploadedFileUrl,
+          issue_date: item.extracted.issue_date,
+          issue_time: item.extracted.issue_time,
+          category: item.extracted.category,
+          merchant_name: item.extracted.merchant_name,
+          amount: item.extracted.amount,
+          ocr_raw_text: item.extracted.ocr_raw_text,
+          is_verified: false,
+          audit_flags: auditFlags,
+          audit_status: 'pendente',
+          cnpj: item.extracted.cnpj,
         })
-        finalTripId = createdTrip.id
       }
 
-      const auditFlags: string[] = []
-      if (item.duplicateMatch || item.keepDuplicate) {
-        auditFlags.push('comprovante_duplicado')
-      }
+      toast({
+        title: 'Comprovantes gravados com sucesso!',
+        description: 'Arquivos gravados no Supabase Storage. Redirecionando para Triagem...',
+      })
 
-      await storageService.createExpense({
-        trip_id: finalTripId,
-        file_name: item.file.name,
-        file_url: item.extracted.file_url,
-        issue_date: item.extracted.issue_date,
-        issue_time: item.extracted.issue_time,
-        category: item.extracted.category,
-        merchant_name: item.extracted.merchant_name,
-        amount: item.extracted.amount,
-        ocr_raw_text: item.extracted.ocr_raw_text,
-        is_verified: false,
-        audit_flags: auditFlags,
-        audit_status: 'pendente',
-        cnpj: item.extracted.cnpj,
+      setTimeout(() => {
+        navigate('/triage')
+      }, 700)
+    } catch (saveErr) {
+      console.error('Error saving expenses:', saveErr)
+      toast({
+        title: 'Erro ao salvar comprovantes',
+        description: 'Não foi possível gravar no banco de dados.',
+        variant: 'destructive',
       })
     }
-
-    toast({
-      title: 'Comprovantes gravados com sucesso!',
-      description: 'Redirecionando para a tela de Triagem split-screen...',
-    })
-
-    setTimeout(() => {
-      navigate('/triage')
-    }, 700)
   }
 
   const processedCount = queue.filter(
@@ -398,19 +398,6 @@ export default function UploadPage() {
             <span className="text-[11px] bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full font-medium border border-slate-200">
               Detector de Duplicidade Ativo
             </span>
-          </div>
-
-          {/* Quick Demo Button */}
-          <div className="mt-5 pt-4 border-t border-slate-100 w-full max-w-sm flex items-center justify-center">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleLoadSampleBatch}
-              className="text-xs text-slate-600 hover:text-blue-700 border-slate-200 gap-1.5"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-              Carregar Lote de Demonstração (4 Recibos)
-            </Button>
           </div>
         </CardContent>
       </Card>

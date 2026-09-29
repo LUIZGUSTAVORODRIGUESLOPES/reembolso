@@ -26,7 +26,11 @@ import {
   Tag,
   Building2,
   Lock,
+  UploadCloud,
+  FileImage,
+  Loader2,
 } from 'lucide-react'
+import { DocumentViewer } from '@/components/DocumentViewer'
 import { storageService } from '@/services/storageService'
 import { Trip, Expense, AuditEvaluationRule, ExpenseCategory, TripStatus } from '@/types/database'
 import {
@@ -93,6 +97,51 @@ export default function TripDetailPage() {
   const [newExpAmount, setNewExpAmount] = useState('')
   const [newExpDate, setNewExpDate] = useState('')
   const [newExpCategory, setNewExpCategory] = useState<ExpenseCategory>('alimentacao')
+  const [selectedReceiptFile, setSelectedReceiptFile] = useState<File | null>(null)
+  const [fileError, setFileError] = useState<string | null>(null)
+  const [isUploadingExpense, setIsUploadingExpense] = useState(false)
+  const [isDragOverReceipt, setIsDragOverReceipt] = useState(false)
+  const fileInputManualRef = React.useRef<HTMLInputElement | null>(null)
+
+  const ALLOWED_MIME_TYPES = [
+    'application/pdf',
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+    'image/jpg',
+  ]
+  const MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024 // 15MB
+
+  const handleSelectFile = (file: File | null | undefined) => {
+    setFileError(null)
+    if (!file) return
+
+    const ext = file.name.toLowerCase().split('.').pop()
+    const isValidExt = ['pdf', 'png', 'jpg', 'jpeg', 'webp'].includes(ext || '')
+    const isValidMime = ALLOWED_MIME_TYPES.includes(file.type) || isValidExt
+
+    if (!isValidMime) {
+      setFileError('Tipo de arquivo não suportado. Envie comprovantes em PDF, JPG, PNG ou WEBP.')
+      toast({
+        title: 'Formato não suportado',
+        description: 'Por favor, selecione um arquivo PDF ou imagem (JPG/PNG).',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    if (file.size > MAX_FILE_SIZE_BYTES) {
+      setFileError('Arquivo muito grande. O limite máximo permitido é de 15 MB.')
+      toast({
+        title: 'Tamanho excedido',
+        description: 'O arquivo selecionado ultrapassa o limite de 15 MB.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    setSelectedReceiptFile(file)
+  }
 
   // Expense Preview Modal
   const [viewingExpense, setViewingExpense] = useState<Expense | null>(null)
@@ -223,6 +272,15 @@ export default function TripDetailPage() {
     e.preventDefault()
     if (!trip) return
 
+    if (isTripLocked) {
+      toast({
+        title: 'Viagem fechada',
+        description: 'Não é permitido adicionar comprovantes a uma viagem fechada ou reembolsada.',
+        variant: 'destructive',
+      })
+      return
+    }
+
     const parsed = parseFloat(newExpAmount.replace(',', '.'))
     if (isNaN(parsed) || parsed <= 0) {
       toast({
@@ -233,34 +291,67 @@ export default function TripDetailPage() {
       return
     }
 
+    setIsUploadingExpense(true)
     try {
+      let uploadedFileUrl = ''
+      let finalFileName = ''
+
+      if (selectedReceiptFile) {
+        finalFileName = selectedReceiptFile.name
+        try {
+          uploadedFileUrl = await storageService.uploadReceiptFile(selectedReceiptFile)
+        } catch (uploadErr) {
+          console.error('Erro ao enviar arquivo para o Supabase Storage:', uploadErr)
+          toast({
+            title: 'Erro no upload do comprovante',
+            description:
+              'Não foi possível salvar o arquivo no armazenamento em nuvem. Tente novamente.',
+            variant: 'destructive',
+          })
+          setIsUploadingExpense(false)
+          return
+        }
+      }
+
       await storageService.createExpense({
         trip_id: trip.id,
-        file_name: `recibo_manual_${Date.now()}.png`,
-        file_url: 'https://img.usecurling.com/p/800/600?q=abstract',
+        file_name: finalFileName || `recibo_manual_${Date.now()}.png`,
+        file_url: uploadedFileUrl || '',
         issue_date: newExpDate || trip.start_date,
         category: newExpCategory,
-        merchant_name: newExpMerchant || 'Comprovante Manual',
+        merchant_name: newExpMerchant.trim() || 'Comprovante Manual',
         amount: parsed,
+        ocr_raw_text: selectedReceiptFile
+          ? `Comprovante manual anexado: ${selectedReceiptFile.name}`
+          : 'Comprovante inserido manualmente sem arquivo anexo.',
         is_verified: true,
         audit_flags: [],
         audit_status: 'conforme',
       })
 
       toast({
-        title: 'Comprovante adicionado!',
-        description: 'A despesa foi anexada à viagem e o total recalculado.',
+        title: 'Comprovante adicionado com sucesso!',
+        description: selectedReceiptFile
+          ? 'O arquivo foi enviado e a despesa registrada na prestação de contas.'
+          : 'A despesa foi registrada com sucesso (sem arquivo anexo).',
       })
 
       setAddExpenseOpen(false)
       setNewExpMerchant('')
       setNewExpAmount('')
+      setSelectedReceiptFile(null)
+      setFileError(null)
       loadTripData()
-    } catch {
+    } catch (saveErr) {
+      console.error('Erro ao criar despesa:', saveErr)
       toast({
         title: 'Erro ao adicionar comprovante',
+        description:
+          'Ocorreu um erro ao gravar a despesa. Verifique sua conexão e tente novamente.',
         variant: 'destructive',
       })
+    } finally {
+      setIsUploadingExpense(false)
     }
   }
 
@@ -840,91 +931,245 @@ export default function TripDetailPage() {
       </Dialog>
 
       {/* Add Single Expense Modal */}
-      <Dialog open={addExpenseOpen} onOpenChange={setAddExpenseOpen}>
-        <DialogContent className="sm:max-w-[480px]">
+      <Dialog
+        open={addExpenseOpen}
+        onOpenChange={(open) => {
+          if (!isUploadingExpense) {
+            setAddExpenseOpen(open)
+            if (!open) {
+              setSelectedReceiptFile(null)
+              setFileError(null)
+            }
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[520px] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-base font-bold text-slate-900 flex items-center gap-2">
               <Plus className="w-4 h-4 text-blue-600" />
               Adicionar Comprovante Manualmente
             </DialogTitle>
             <DialogDescription className="text-xs text-slate-500">
-              Cadastre um recibo avulso diretamente para esta viagem.
+              Cadastre um recibo avulso diretamente para esta viagem e anexe o comprovante fiscal.
             </DialogDescription>
           </DialogHeader>
 
-          <form onSubmit={handleManualAddExpense} className="space-y-3 pt-2">
-            <div className="space-y-1">
-              <Label className="text-xs font-semibold text-slate-700">Estabelecimento *</Label>
-              <Input
-                value={newExpMerchant}
-                onChange={(e) => setNewExpMerchant(e.target.value)}
-                placeholder="Ex: Localiza Aluguel de Carros, Uber, Restaurante..."
-                required
-                className="text-xs"
-              />
+          {isTripLocked ? (
+            <div className="p-4 bg-slate-50 border border-slate-200 rounded-lg text-slate-600 text-xs flex items-center gap-2">
+              <Lock className="w-4 h-4 text-slate-500 shrink-0" />
+              <span>
+                Esta viagem está fechada ou reembolsada. A inclusão de novas despesas está
+                bloqueada.
+              </span>
             </div>
+          ) : (
+            <form onSubmit={handleManualAddExpense} className="space-y-4 pt-1">
+              {/* Receipt File Upload Dropzone */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                    <FileText className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Arquivo do Comprovante (Recibo / Nota Fiscal)</span>
+                  </Label>
+                  <span className="text-[11px] text-slate-400 font-normal">Opcional</span>
+                </div>
 
-            <div className="grid grid-cols-2 gap-3">
+                <input
+                  ref={fileInputManualRef}
+                  type="file"
+                  accept=".pdf,.png,.jpg,.jpeg,.webp"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    handleSelectFile(file)
+                    // Reset input so re-selecting same file triggers onChange
+                    e.target.value = ''
+                  }}
+                />
+
+                {!selectedReceiptFile ? (
+                  <div
+                    onDragOver={(e) => {
+                      e.preventDefault()
+                      setIsDragOverReceipt(true)
+                    }}
+                    onDragLeave={(e) => {
+                      e.preventDefault()
+                      setIsDragOverReceipt(false)
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      setIsDragOverReceipt(false)
+                      const file = e.dataTransfer.files?.[0]
+                      handleSelectFile(file)
+                    }}
+                    onClick={() => fileInputManualRef.current?.click()}
+                    className={`border-2 border-dashed rounded-xl p-4 sm:p-5 flex flex-col items-center justify-center text-center cursor-pointer transition-all ${
+                      isDragOverReceipt
+                        ? 'border-[#1e40af] bg-blue-50/60 scale-[1.01]'
+                        : 'border-slate-300 hover:border-blue-400 hover:bg-slate-50/70 bg-slate-50/30'
+                    }`}
+                  >
+                    <div className="w-10 h-10 rounded-xl bg-blue-50 text-[#1e40af] flex items-center justify-center mb-2">
+                      <UploadCloud className="w-5 h-5" />
+                    </div>
+                    <p className="text-xs font-bold text-slate-800">
+                      Clique para selecionar ou arraste o comprovante aqui
+                    </p>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      PDF, JPG, PNG ou WEBP (até 15 MB)
+                    </p>
+                    <span className="mt-2 text-[10px] bg-blue-50 text-[#1e40af] px-2 py-0.5 rounded-full font-medium border border-blue-200">
+                      Upload seguro no Supabase Storage
+                    </span>
+                  </div>
+                ) : (
+                  <div className="border border-blue-200 bg-blue-50/40 rounded-xl p-3 flex items-center justify-between gap-3 shadow-2xs">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-9 h-9 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0">
+                        {selectedReceiptFile.name.toLowerCase().endsWith('.pdf') ? (
+                          <FileText className="w-5 h-5" />
+                        ) : (
+                          <FileImage className="w-5 h-5" />
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-slate-900 truncate">
+                          {selectedReceiptFile.name}
+                        </p>
+                        <p className="text-[11px] text-slate-500">
+                          {(selectedReceiptFile.size / 1024).toFixed(1)} KB • Pronto para upload
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => fileInputManualRef.current?.click()}
+                        className="h-7 text-[11px] text-[#1e40af] hover:bg-blue-100"
+                      >
+                        Trocar
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setSelectedReceiptFile(null)
+                          setFileError(null)
+                        }}
+                        className="h-7 w-7 p-0 text-slate-400 hover:text-rose-600"
+                        title="Remover arquivo selecionado"
+                      >
+                        <X className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {fileError && (
+                  <p className="text-[11px] text-rose-600 font-medium flex items-center gap-1 mt-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{fileError}</span>
+                  </p>
+                )}
+              </div>
+
               <div className="space-y-1">
-                <Label className="text-xs font-semibold text-slate-700">Data de Emissão *</Label>
+                <Label className="text-xs font-semibold text-slate-700">Estabelecimento *</Label>
                 <Input
-                  type="date"
-                  value={newExpDate}
-                  onChange={(e) => setNewExpDate(e.target.value)}
+                  value={newExpMerchant}
+                  onChange={(e) => setNewExpMerchant(e.target.value)}
+                  placeholder="Ex: Localiza Aluguel de Carros, Uber, Restaurante..."
                   required
                   className="text-xs"
+                  disabled={isUploadingExpense}
                 />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs font-semibold text-slate-700">Data de Emissão *</Label>
+                  <Input
+                    type="date"
+                    value={newExpDate}
+                    onChange={(e) => setNewExpDate(e.target.value)}
+                    required
+                    className="text-xs"
+                    disabled={isUploadingExpense}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <Label className="text-xs font-semibold text-slate-700">Valor (R$) *</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={newExpAmount}
+                    onChange={(e) => setNewExpAmount(e.target.value)}
+                    placeholder="0,00"
+                    required
+                    className="text-xs tabular-nums"
+                    disabled={isUploadingExpense}
+                  />
+                </div>
               </div>
 
               <div className="space-y-1">
-                <Label className="text-xs font-semibold text-slate-700">Valor (R$) *</Label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={newExpAmount}
-                  onChange={(e) => setNewExpAmount(e.target.value)}
-                  placeholder="0,00"
-                  required
-                  className="text-xs tabular-nums"
-                />
+                <Label className="text-xs font-semibold text-slate-700">Categoria *</Label>
+                <Select
+                  value={newExpCategory}
+                  onValueChange={(val) => setNewExpCategory(val as ExpenseCategory)}
+                  disabled={isUploadingExpense}
+                >
+                  <SelectTrigger className="text-xs">
+                    <SelectValue placeholder="Selecione a categoria" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(Object.keys(CATEGORY_LABELS) as ExpenseCategory[]).map((cat) => (
+                      <SelectItem key={cat} value={cat}>
+                        {CATEGORY_LABELS[cat]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
-            </div>
 
-            <div className="space-y-1">
-              <Label className="text-xs font-semibold text-slate-700">Categoria *</Label>
-              <Select
-                value={newExpCategory}
-                onValueChange={(val) => setNewExpCategory(val as ExpenseCategory)}
-              >
-                <SelectTrigger className="text-xs">
-                  <SelectValue placeholder="Selecione a categoria" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(Object.keys(CATEGORY_LABELS) as ExpenseCategory[]).map((cat) => (
-                    <SelectItem key={cat} value={cat}>
-                      {CATEGORY_LABELS[cat]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <DialogFooter className="pt-3 gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setAddExpenseOpen(false)}
-                className="text-xs"
-              >
-                Cancelar
-              </Button>
-              <Button type="submit" size="sm" className="bg-[#1e40af] text-white text-xs">
-                Adicionar Despesa
-              </Button>
-            </DialogFooter>
-          </form>
+              <DialogFooter className="pt-3 gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAddExpenseOpen(false)}
+                  disabled={isUploadingExpense}
+                  className="text-xs"
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={isUploadingExpense}
+                  className="bg-[#1e40af] hover:bg-[#1d3d9e] text-white text-xs gap-1.5 shadow-sm"
+                >
+                  {isUploadingExpense ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Salvando Comprovante...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Adicionar Despesa</span>
+                    </>
+                  )}
+                </Button>
+              </DialogFooter>
+            </form>
+          )}
         </DialogContent>
       </Dialog>
 
@@ -996,37 +1241,43 @@ export default function TripDetailPage() {
 
       {/* View Expense Modal */}
       <Dialog open={!!viewingExpense} onOpenChange={(open) => !open && setViewingExpense(null)}>
-        <DialogContent className="sm:max-w-[560px]">
+        <DialogContent className="sm:max-w-[620px] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-base font-bold text-slate-900 flex items-center justify-between">
-              <span>{viewingExpense?.merchant_name}</span>
-              <span className="text-emerald-600 font-extrabold tabular-nums">
+              <span className="truncate mr-2">{viewingExpense?.merchant_name}</span>
+              <span className="text-emerald-600 font-extrabold tabular-nums shrink-0">
                 {viewingExpense && formatCurrencyBRL(viewingExpense.amount)}
               </span>
             </DialogTitle>
             <DialogDescription className="text-xs text-slate-500">
-              Arquivo: {viewingExpense?.file_name} • Data:{' '}
+              Arquivo: {viewingExpense?.file_name || 'Sem arquivo anexado'} • Data:{' '}
               {viewingExpense && formatDateBR(viewingExpense.issue_date)}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="bg-slate-100 p-3 rounded-lg flex items-center justify-center max-h-[360px] overflow-auto">
-            {viewingExpense && (
-              <img
-                src={viewingExpense.file_url}
-                alt={viewingExpense.merchant_name}
-                className="max-h-[320px] w-auto object-contain rounded shadow"
-              />
-            )}
-          </div>
-
-          {viewingExpense?.ocr_raw_text && (
-            <div className="text-[11px] font-mono bg-slate-50 p-2.5 rounded border border-slate-200 text-slate-600">
-              <strong>Extração OCR:</strong> {viewingExpense.ocr_raw_text}
+          {viewingExpense && (
+            <div className="pt-2">
+              {viewingExpense.file_url || viewingExpense.file_name ? (
+                <DocumentViewer
+                  fileName={viewingExpense.file_name || 'comprovante'}
+                  fileUrl={viewingExpense.file_url}
+                  ocrRawText={viewingExpense.ocr_raw_text}
+                />
+              ) : (
+                <div className="text-center p-8 bg-slate-50 rounded-xl border border-slate-200">
+                  <FileText className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                  <p className="text-xs font-semibold text-slate-700">
+                    Despesa cadastrada sem anexo de comprovante
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    Este item foi incluído manualmente sem o upload de arquivo digital.
+                  </p>
+                </div>
+              )}
             </div>
           )}
 
-          <DialogFooter>
+          <DialogFooter className="pt-3">
             <Button
               variant="outline"
               size="sm"

@@ -394,9 +394,11 @@ export default function TriagePage() {
             {currentExpense.ocr_raw_text && (
               <div className="bg-slate-50 border-t border-slate-200 p-3 text-[11px] text-slate-500 font-mono">
                 <span className="font-bold text-slate-700 block mb-0.5">
-                  OCR RAW EXTRACTION (Simulado):
+                  TEXTO EXTRAÍDO DO COMPROVANTE (OCR REAL):
                 </span>
-                <p className="line-clamp-2 text-slate-600">{currentExpense.ocr_raw_text}</p>
+                <p className="line-clamp-3 text-slate-600 whitespace-pre-line">
+                  {currentExpense.ocr_raw_text}
+                </p>
               </div>
             )}
           </Card>

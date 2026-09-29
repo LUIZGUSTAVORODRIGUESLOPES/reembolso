@@ -9,7 +9,148 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      audit_rules_log: {
+        Row: {
+          created_at: string
+          id: string
+          message: string
+          rule_key: string
+          status: string
+          trip_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          message: string
+          rule_key: string
+          status: string
+          trip_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          message?: string
+          rule_key?: string
+          status?: string
+          trip_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'audit_rules_log_trip_id_fkey'
+            columns: ['trip_id']
+            isOneToOne: false
+            referencedRelation: 'trips'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      expenses: {
+        Row: {
+          amount: number
+          audit_flags: string[]
+          audit_justification: string | null
+          audit_status: string
+          category: string
+          cnpj: string | null
+          created_at: string
+          file_name: string
+          file_url: string
+          id: string
+          is_verified: boolean
+          issue_date: string
+          issue_time: string | null
+          merchant_name: string
+          ocr_raw_text: string | null
+          trip_id: string | null
+        }
+        Insert: {
+          amount?: number
+          audit_flags?: string[]
+          audit_justification?: string | null
+          audit_status?: string
+          category: string
+          cnpj?: string | null
+          created_at?: string
+          file_name: string
+          file_url?: string
+          id?: string
+          is_verified?: boolean
+          issue_date: string
+          issue_time?: string | null
+          merchant_name: string
+          ocr_raw_text?: string | null
+          trip_id?: string | null
+        }
+        Update: {
+          amount?: number
+          audit_flags?: string[]
+          audit_justification?: string | null
+          audit_status?: string
+          category?: string
+          cnpj?: string | null
+          created_at?: string
+          file_name?: string
+          file_url?: string
+          id?: string
+          is_verified?: boolean
+          issue_date?: string
+          issue_time?: string | null
+          merchant_name?: string
+          ocr_raw_text?: string | null
+          trip_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'expenses_trip_id_fkey'
+            columns: ['trip_id']
+            isOneToOne: false
+            referencedRelation: 'trips'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      trips: {
+        Row: {
+          created_at: string
+          destination: string
+          end_date: string
+          id: string
+          motivo: string
+          notes: string | null
+          start_date: string
+          status: string
+          total_amount: number
+          transport_type: string
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          destination: string
+          end_date: string
+          id?: string
+          motivo?: string
+          notes?: string | null
+          start_date: string
+          status?: string
+          total_amount?: number
+          transport_type: string
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          destination?: string
+          end_date?: string
+          id?: string
+          motivo?: string
+          notes?: string | null
+          start_date?: string
+          status?: string
+          total_amount?: number
+          transport_type?: string
+          user_id?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

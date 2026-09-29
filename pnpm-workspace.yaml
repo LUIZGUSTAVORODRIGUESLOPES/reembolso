@@ -1,7 +1,9 @@
 injectWorkspacePackages: false
 allowBuilds:
   '@swc/core': true
+  canvas: true
   esbuild: true
+  tesseract.js: true
 
 minimumReleaseAgeExclude:
   - date-fns@4.4.0

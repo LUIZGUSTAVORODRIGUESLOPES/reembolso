@@ -67,6 +67,8 @@
     "sonner": "^2.0.7",
     "tailwind-merge": "^2.6.1",
     "tailwindcss-animate": "^1.0.7",
+    "pdfjs-dist": "^3.11.174",
+    "tesseract.js": "^5.1.1",
     "vaul": "^1.1.2",
     "zod": "^4.4.3"
   },

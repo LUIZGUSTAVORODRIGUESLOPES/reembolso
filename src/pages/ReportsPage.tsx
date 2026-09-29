@@ -17,8 +17,12 @@ import {
   ShieldCheck,
   Building2,
   FileCheck2,
+  Loader2,
+  AlertCircle,
 } from 'lucide-react'
 import { storageService } from '@/services/storageService'
+import { resolveReceiptUrl } from '@/services/receiptFileResolver'
+import * as pdfjsLib from 'pdfjs-dist'
 import { Trip, Expense } from '@/types/database'
 import {
   formatCurrencyBRL,
@@ -56,6 +60,10 @@ export default function ReportsPage() {
   const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null)
   const [tripExpenses, setTripExpenses] = useState<Expense[]>([])
   const [previewOpen, setPreviewOpen] = useState(false)
+  const [generatingPdf, setGeneratingPdf] = useState(false)
+  const [pdfProgressText, setPdfProgressText] = useState('')
+  const [thumbnailUrls, setThumbnailUrls] = useState<Record<string, string>>({})
+  const [loadingThumbnails, setLoadingThumbnails] = useState(false)
 
   // Email Modal State
   const [emailModalOpen, setEmailModalOpen] = useState(false)
@@ -86,6 +94,54 @@ export default function ReportsPage() {
     const exps = await storageService.listExpenses(trip.id)
     setTripExpenses(exps)
     setPreviewOpen(true)
+    loadThumbnailsForExpenses(exps)
+  }
+
+  // Load preview thumbnails for each expense (handles images, base64, PDFs rendered to thumbnail canvas)
+  const loadThumbnailsForExpenses = async (exps: Expense[]) => {
+    setLoadingThumbnails(true)
+    const thumbs: Record<string, string> = {}
+
+    await Promise.all(
+      exps.map(async (exp) => {
+        try {
+          const resolved = await resolveReceiptUrl(exp.file_url, exp.file_name)
+          if (!resolved.url) return
+
+          if (!resolved.isPdf) {
+            thumbs[exp.id] = resolved.url
+            return
+          }
+
+          // If PDF, render first page as thumbnail
+          try {
+            const loadingTask = pdfjsLib.getDocument({
+              url: resolved.url,
+              cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
+              cMapPacked: true,
+            })
+            const pdf = await loadingTask.promise
+            const page = await pdf.getPage(1)
+            const viewport = page.getViewport({ scale: 0.5 })
+            const canvas = document.createElement('canvas')
+            canvas.width = viewport.width
+            canvas.height = viewport.height
+            const ctx = canvas.getContext('2d')
+            if (ctx) {
+              await page.render({ canvasContext: ctx, viewport }).promise
+              thumbs[exp.id] = canvas.toDataURL('image/jpeg', 0.8)
+            }
+          } catch (err) {
+            console.warn(`Could not render thumbnail for PDF ${exp.file_name}:`, err)
+          }
+        } catch {
+          // Ignore individual thumbnail failure
+        }
+      }),
+    )
+
+    setThumbnailUrls(thumbs)
+    setLoadingThumbnails(false)
   }
 
   const handleExportExcel = () => {
@@ -97,13 +153,31 @@ export default function ReportsPage() {
     })
   }
 
-  const handleExportPdf = () => {
-    if (!selectedTrip) return
-    exportConsolidatedReportPdf(selectedTrip, tripExpenses)
-    toast({
-      title: 'Relatório consolidado gerado!',
-      description: 'A janela de impressão do PDF com todos os recibos foi aberta.',
-    })
+  const handleExportPdf = async () => {
+    if (!selectedTrip || generatingPdf) return
+    setGeneratingPdf(true)
+    setPdfProgressText('Iniciando processamento dos comprovantes...')
+
+    try {
+      await exportConsolidatedReportPdf(selectedTrip, tripExpenses, (current, total, message) => {
+        setPdfProgressText(`${message} (${Math.round((current / total) * 100)}%)`)
+      })
+      toast({
+        title: 'Relatório consolidado gerado!',
+        description:
+          'O relatório e todos os comprovantes foram processados e abertos para impressão/PDF.',
+      })
+    } catch (err: any) {
+      console.error('Error generating consolidated PDF:', err)
+      toast({
+        title: 'Erro na geração do relatório',
+        description: err?.message || 'Houve uma falha ao compilar o PDF com os comprovantes.',
+        variant: 'destructive',
+      })
+    } finally {
+      setGeneratingPdf(false)
+      setPdfProgressText('')
+    }
   }
 
   const handleOpenEmailModal = () => {
@@ -344,29 +418,50 @@ export default function ReportsPage() {
                   </h4>
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                    {tripExpenses.map((exp, idx) => (
-                      <div
-                        key={exp.id}
-                        className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-center space-y-1 hover:border-blue-400 transition-colors"
-                      >
-                        <div className="h-20 bg-white rounded border border-slate-200 flex items-center justify-center overflow-hidden">
-                          <img
-                            src={exp.file_url}
-                            alt={exp.file_name}
-                            className="max-h-full max-w-full object-contain"
-                          />
-                        </div>
-                        <p
-                          className="text-[10px] font-semibold text-slate-700 truncate"
-                          title={exp.merchant_name}
+                    {tripExpenses.map((exp, idx) => {
+                      const thumb = thumbnailUrls[exp.id]
+                      const isPdf =
+                        exp.file_name.toLowerCase().endsWith('.pdf') ||
+                        exp.file_url.toLowerCase().includes('.pdf')
+
+                      return (
+                        <div
+                          key={exp.id}
+                          className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-center space-y-1 hover:border-blue-400 transition-colors"
                         >
-                          {idx + 1}. {exp.merchant_name}
-                        </p>
-                        <p className="text-[10px] font-bold text-emerald-600 tabular-nums">
-                          {formatCurrencyBRL(exp.amount)}
-                        </p>
-                      </div>
-                    ))}
+                          <div className="h-20 bg-white rounded border border-slate-200 flex items-center justify-center overflow-hidden relative">
+                            {thumb ? (
+                              <img
+                                src={thumb}
+                                alt={exp.file_name}
+                                className="max-h-full max-w-full object-contain"
+                              />
+                            ) : loadingThumbnails ? (
+                              <Loader2 className="w-4 h-4 text-slate-400 animate-spin" />
+                            ) : isPdf ? (
+                              <div className="flex flex-col items-center justify-center gap-1 text-slate-500">
+                                <FileText className="w-6 h-6 text-rose-500" />
+                                <span className="text-[9px] font-semibold">PDF Anexo</span>
+                              </div>
+                            ) : (
+                              <div className="flex flex-col items-center justify-center gap-1 text-slate-400">
+                                <FileCheck2 className="w-5 h-5" />
+                                <span className="text-[9px]">Comprovante</span>
+                              </div>
+                            )}
+                          </div>
+                          <p
+                            className="text-[10px] font-semibold text-slate-700 truncate"
+                            title={exp.merchant_name}
+                          >
+                            {idx + 1}. {exp.merchant_name}
+                          </p>
+                          <p className="text-[10px] font-bold text-emerald-600 tabular-nums">
+                            {formatCurrencyBRL(exp.amount)}
+                          </p>
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
 
@@ -386,13 +481,30 @@ export default function ReportsPage() {
                     {/* Consolidated PDF */}
                     <Button
                       size="sm"
+                      disabled={generatingPdf}
                       onClick={handleExportPdf}
-                      className="bg-rose-600 hover:bg-rose-700 text-white text-xs gap-1.5"
+                      className="bg-rose-600 hover:bg-rose-700 text-white text-xs gap-1.5 min-w-[190px]"
                     >
-                      <FileText className="w-3.5 h-3.5" />
-                      <span>Baixar em PDF Consolidado</span>
+                      {generatingPdf ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Processando Anexos...</span>
+                        </>
+                      ) : (
+                        <>
+                          <FileText className="w-3.5 h-3.5" />
+                          <span>Baixar em PDF Consolidado</span>
+                        </>
+                      )}
                     </Button>
                   </div>
+                  {generatingPdf && pdfProgressText && (
+                    <div className="w-full text-center py-1">
+                      <p className="text-[11px] text-blue-700 font-medium animate-pulse">
+                        {pdfProgressText}
+                      </p>
+                    </div>
+                  )}
 
                   {/* Send Email */}
                   <Button

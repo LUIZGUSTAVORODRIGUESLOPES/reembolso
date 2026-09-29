@@ -90,12 +90,18 @@ export async function resolveReceiptUrl(
   if (trimmedName) {
     const files = await getBucketFileNames()
     const cleanTarget = normalizeName(trimmedName)
+    // Extract base name without extension
+    const baseTarget = cleanTarget.replace(/\.[a-z0-9]+$/i, '')
+    // Also extract date-time timestamp pattern if present, e.g. "20260828-1234" or "20260828_1234"
+    const timestampMatch = trimmedName.match(/\d{8}[-_]\d{4}/)
+    const timestamp = timestampMatch ? timestampMatch[0].replace('-', '_') : null
 
     // Look for file ending with cleanTarget or containing distinctive date-time part
     const match = files.find((f) => {
       const low = f.toLowerCase()
       if (low.endsWith(cleanTarget)) return true
-      if (low.includes(cleanTarget.replace('.pdf', '').replace(/\.[a-z]+$/, ''))) return true
+      if (baseTarget && low.includes(baseTarget)) return true
+      if (timestamp && low.includes(timestamp)) return true
       return false
     })
 

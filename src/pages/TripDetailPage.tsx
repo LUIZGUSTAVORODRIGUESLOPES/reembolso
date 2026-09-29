@@ -153,6 +153,14 @@ export default function TripDetailPage() {
 
   const handleSaveJustification = async () => {
     if (!justifyingRule || !trip) return
+    if (isTripLocked) {
+      toast({
+        title: 'Ação não permitida',
+        description: 'Viagem fechada ou reembolsada não permite alteração de auditoria.',
+        variant: 'destructive',
+      })
+      return
+    }
     if (!justificationText.trim()) {
       toast({
         title: 'Justificativa obrigatória',
@@ -190,6 +198,14 @@ export default function TripDetailPage() {
 
   const handleIgnoreRule = async (rule: AuditEvaluationRule) => {
     if (!trip) return
+    if (isTripLocked) {
+      toast({
+        title: 'Ação não permitida',
+        description: 'Viagem fechada ou reembolsada não permite alteração de auditoria.',
+        variant: 'destructive',
+      })
+      return
+    }
     await storageService.saveAuditLog({
       trip_id: trip.id,
       rule_key: rule.key,
@@ -561,32 +577,44 @@ export default function TripDetailPage() {
                     {/* Action buttons for warning */}
                     {isWarning && (
                       <div className="flex items-center gap-2 shrink-0 sm:self-center">
-                        <Button
-                          size="sm"
-                          onClick={() => setAddExpenseOpen(true)}
-                          className="bg-[#1e40af] hover:bg-[#1d3d9e] text-white text-xs h-8 px-2.5"
-                        >
-                          <Plus className="w-3.5 h-3.5 mr-1" />
-                          Adicionar Comprovante
-                        </Button>
+                        {isTripLocked ? (
+                          <div
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-100 border border-slate-200 text-slate-400 text-xs font-medium cursor-not-allowed select-none"
+                            title="Viagem fechada — ações de auditoria bloqueadas"
+                          >
+                            <Lock className="w-3 h-3 text-slate-400" />
+                            <span>Viagem Fechada</span>
+                          </div>
+                        ) : (
+                          <>
+                            <Button
+                              size="sm"
+                              onClick={() => setAddExpenseOpen(true)}
+                              className="bg-[#1e40af] hover:bg-[#1d3d9e] text-white text-xs h-8 px-2.5"
+                            >
+                              <Plus className="w-3.5 h-3.5 mr-1" />
+                              Adicionar Comprovante
+                            </Button>
 
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleOpenJustify(rule)}
-                          className="text-xs h-8 px-2.5 border-amber-300 text-amber-900 bg-white hover:bg-amber-50"
-                        >
-                          Justificar
-                        </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleOpenJustify(rule)}
+                              className="text-xs h-8 px-2.5 border-amber-300 text-amber-900 bg-white hover:bg-amber-50"
+                            >
+                              Justificar
+                            </Button>
 
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => handleIgnoreRule(rule)}
-                          className="text-xs h-8 px-2 text-slate-400 hover:text-slate-600"
-                        >
-                          Ignorar
-                        </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleIgnoreRule(rule)}
+                              className="text-xs h-8 px-2 text-slate-400 hover:text-slate-600"
+                            >
+                              Ignorar
+                            </Button>
+                          </>
+                        )}
                       </div>
                     )}
                   </div>

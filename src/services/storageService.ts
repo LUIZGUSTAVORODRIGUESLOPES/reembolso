@@ -451,6 +451,122 @@ class SupabaseStorageService {
 
     const rules: AuditEvaluationRule[] = []
 
+    // Regra: Transporte Principal da Viagem (Comprovante de Passagem Aérea / Aluguel de Carro)
+    const transportType = trip.transport_type
+    const transportLog = logs.find((l) => l.rule_key === 'transporte_principal_ausente')
+
+    if (transportType === 'aéreo') {
+      const flightKeywords = [
+        'latam',
+        'gol linhas',
+        'gol',
+        'azul linhas',
+        'azul',
+        'passagem',
+        'bilhete',
+        'aereo',
+        'aéreo',
+        'voo',
+        'boarding',
+        'aeroporto',
+        'airline',
+        'flight',
+        'e-ticket',
+        'eticket',
+        'localizador',
+        'trecho',
+      ]
+
+      const hasFlightExpense = expenses.some((e) => {
+        const merchant = (e.merchant_name || '').toLowerCase()
+        const text = (e.ocr_raw_text || '').toLowerCase()
+        const isTransportCategory = e.category === 'transporte'
+
+        const matchesKeyword = flightKeywords.some((k) => merchant.includes(k) || text.includes(k))
+
+        // Se a categoria for transporte e bater com palavra-chave, ou tiver menção explícita de passagem/voo
+        return (
+          (isTransportCategory && matchesKeyword) ||
+          merchant.includes('linhas aéreas') ||
+          merchant.includes('airline')
+        )
+      })
+
+      if (!hasFlightExpense) {
+        rules.push({
+          key: 'transporte_principal_ausente',
+          title: 'Transporte Principal da Viagem',
+          message:
+            'Viagem aérea sem comprovante de passagem aérea anexado. Adicione o bilhete/e-ticket de embarque ou justifique.',
+          severity: 'warning',
+          status: transportLog?.status === 'justified' ? 'justified' : 'warning',
+          justification: transportLog?.message,
+        })
+      } else {
+        rules.push({
+          key: 'transporte_principal_ausente',
+          title: 'Transporte Principal da Viagem',
+          message: 'Comprovante de passagem aérea / bilhete de embarque identificado com sucesso.',
+          severity: 'pass',
+          status: 'pass',
+        })
+      }
+    } else if (transportType === 'carro_alugado') {
+      const rentalKeywords = [
+        'localiza',
+        'movida',
+        'unidas',
+        'aluguel',
+        'locadora',
+        'rent a car',
+        'locacao',
+        'locação',
+        'hertz',
+        'avis',
+      ]
+      const hasRentalExpense = expenses.some((e) => {
+        const merchant = (e.merchant_name || '').toLowerCase()
+        const text = (e.ocr_raw_text || '').toLowerCase()
+        const isTransportCategory = e.category === 'transporte'
+        return (
+          isTransportCategory &&
+          rentalKeywords.some((k) => merchant.includes(k) || text.includes(k))
+        )
+      })
+
+      if (!hasRentalExpense) {
+        rules.push({
+          key: 'transporte_principal_ausente',
+          title: 'Transporte Principal da Viagem',
+          message:
+            'Viagem com carro alugado — não há contrato/fatura de locação de veículo anexada. Adicione o comprovante ou justifique.',
+          severity: 'warning',
+          status: transportLog?.status === 'justified' ? 'justified' : 'warning',
+          justification: transportLog?.message,
+        })
+      } else {
+        rules.push({
+          key: 'transporte_principal_ausente',
+          title: 'Transporte Principal da Viagem',
+          message: 'Comprovante de aluguel de veículo identificado com sucesso.',
+          severity: 'pass',
+          status: 'pass',
+        })
+      }
+    } else {
+      // carro_proprio ou outros: sem exigência de passagem ou locação, fica Conforme/neutro
+      rules.push({
+        key: 'transporte_principal_ausente',
+        title: 'Transporte Principal da Viagem',
+        message:
+          transportType === 'carro_proprio'
+            ? 'Transporte realizado em veículo próprio (sem exigência de passagem/locação).'
+            : 'Transporte principal não requer comprovante obrigatório de bilhete/locadora.',
+        severity: 'pass',
+        status: 'pass',
+      })
+    }
+
     // Regra 1: Viagem Aérea sem transporte terrestre (uber/táxi/estacionamento) nas datas
     if (trip.transport_type === 'aéreo') {
       const groundExpenses = expenses.filter((e) =>

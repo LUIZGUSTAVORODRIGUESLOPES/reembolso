@@ -15,6 +15,7 @@ export type ExpenseCategory =
 export type AuditStatus = 'pendente' | 'conforme' | 'justificado'
 
 export type AuditFlag =
+  | 'transporte_principal_ausente'
   | 'voo_sem_transporte_aeroporto'
   | 'sem_comprovante_hotel'
   | 'comprovante_duplicado'

@@ -451,6 +451,10 @@ class SupabaseStorageService {
       audit_status: expenseData.audit_status || 'pendente',
       audit_justification: expenseData.audit_justification || null,
       cnpj: expenseData.cnpj || null,
+      audit_manual_checked: expenseData.audit_manual_checked ?? false,
+      audit_manual_checked_at: expenseData.audit_manual_checked_at || null,
+      audit_manual_checked_by_id: expenseData.audit_manual_checked_by_id || null,
+      audit_manual_checked_by_name: expenseData.audit_manual_checked_by_name || null,
     }
 
     if (expenseData.id && this.isValidUuid(expenseData.id)) {
@@ -470,6 +474,41 @@ class SupabaseStorageService {
     }
 
     return created
+  }
+
+  public async setExpenseManualAudit(
+    expenseId: string,
+    checked: boolean,
+    user: { id: string; name: string },
+  ): Promise<Expense | null> {
+    const expense = await this.getExpense(expenseId)
+    if (!expense) throw new Error('Despesa não encontrada.')
+
+    if (expense.trip_id) {
+      const trip = await this.getTrip(expense.trip_id)
+      if (trip && this.isTripLockedForDeletion(trip.status)) {
+        throw new Error('Viagem fechada ou reembolsada não permite alteração de auditoria.')
+      }
+    }
+
+    const updates: Partial<Expense> = checked
+      ? {
+          audit_manual_checked: true,
+          audit_manual_checked_at: new Date().toISOString(),
+          audit_manual_checked_by_id: user.id,
+          audit_manual_checked_by_name: user.name,
+          audit_status: 'conforme',
+        }
+      : {
+          audit_manual_checked: false,
+          audit_manual_checked_at: null,
+          audit_manual_checked_by_id: null,
+          audit_manual_checked_by_name: null,
+          // When reverting manual check: if it was previously marked conforme manually, return to pendente
+          audit_status: 'pendente',
+        }
+
+    return await this.updateExpense(expenseId, updates)
   }
 
   public async updateExpense(
@@ -1015,6 +1054,10 @@ class SupabaseStorageService {
       audit_status: row.audit_status || 'pendente',
       audit_justification: row.audit_justification || '',
       cnpj: row.cnpj || '',
+      audit_manual_checked: Boolean(row.audit_manual_checked),
+      audit_manual_checked_at: row.audit_manual_checked_at || null,
+      audit_manual_checked_by_id: row.audit_manual_checked_by_id || null,
+      audit_manual_checked_by_name: row.audit_manual_checked_by_name || null,
     }
   }
 }

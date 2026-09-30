@@ -68,6 +68,10 @@ export interface Expense {
   audit_status: AuditStatus
   audit_justification?: string
   cnpj?: string
+  audit_manual_checked?: boolean
+  audit_manual_checked_at?: string | null
+  audit_manual_checked_by_id?: string | null
+  audit_manual_checked_by_name?: string | null
 }
 
 export interface AuditRulesLog {

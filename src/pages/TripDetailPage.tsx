@@ -46,6 +46,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   Dialog,
   DialogContent,
@@ -81,12 +82,13 @@ export default function TripDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { toast } = useToast()
-  const { user, loading: authLoading } = useAuth()
+  const { user, profile, loading: authLoading } = useAuth()
 
   const [trip, setTrip] = useState<Trip | null>(null)
   const [expenses, setExpenses] = useState<Expense[]>([])
   const [auditRules, setAuditRules] = useState<AuditEvaluationRule[]>([])
   const [loading, setLoading] = useState(true)
+  const [checkingExpenseId, setCheckingExpenseId] = useState<string | null>(null)
 
   // Justification Modal
   const [justifyingRule, setJustifyingRule] = useState<AuditEvaluationRule | null>(null)
@@ -203,6 +205,57 @@ export default function TripDetailPage() {
       })
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleToggleManualAudit = async (exp: Expense, markConforme: boolean) => {
+    if (!trip || !user) return
+
+    if (isTripLocked) {
+      toast({
+        title: 'Ação não permitida',
+        description:
+          'Viagem fechada ou reembolsada não permite alteração de conferência de auditoria.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    setCheckingExpenseId(exp.id)
+    try {
+      const currentUserName =
+        profile?.full_name ||
+        user.user_metadata?.full_name ||
+        user.user_metadata?.name ||
+        user.email ||
+        'Auditor Corporativo'
+
+      const updated = await storageService.setExpenseManualAudit(exp.id, markConforme, {
+        id: user.id,
+        name: currentUserName,
+      })
+
+      if (updated) {
+        setExpenses((prev) => prev.map((e) => (e.id === exp.id ? updated : e)))
+        if (viewingExpense && viewingExpense.id === exp.id) {
+          setViewingExpense(updated)
+        }
+      }
+
+      toast({
+        title: markConforme ? 'Conferência confirmada (OK)' : 'Conferência revertida',
+        description: markConforme
+          ? `O lançamento "${exp.merchant_name}" foi conferido e marcado como conforme por ${currentUserName}.`
+          : `A conferência do lançamento "${exp.merchant_name}" voltou para o status pendente.`,
+      })
+    } catch (err: any) {
+      toast({
+        title: 'Erro na conferência',
+        description: err?.message || 'Não foi possível atualizar o status de auditoria.',
+        variant: 'destructive',
+      })
+    } finally {
+      setCheckingExpenseId(null)
     }
   }
 
@@ -462,6 +515,14 @@ export default function TripDetailPage() {
   const auditPercent = totalRules > 0 ? Math.round((passedRules / totalRules) * 100) : 100
   const statusConf = TRIP_STATUS_CONFIG[trip.status]
   const isTripLocked = storageService.isTripLockedForDeletion(trip.status)
+
+  // Manual Audit Progress (conferência humana de cada lançamento)
+  const totalExpenses = expenses.length
+  const checkedExpensesCount = expenses.filter(
+    (e) => e.audit_manual_checked || e.audit_status === 'conforme',
+  ).length
+  const checkedExpensesPercent =
+    totalExpenses > 0 ? Math.round((checkedExpensesCount / totalExpenses) * 100) : 0
 
   return (
     <div className="space-y-6">
@@ -757,6 +818,22 @@ export default function TripDetailPage() {
             <span className="text-xs bg-slate-100 text-slate-600 font-semibold px-2 py-0.5 rounded-full">
               {expenses.length}
             </span>
+
+            {/* Manual Audit Check Progress Bar */}
+            {totalExpenses > 0 && (
+              <div className="hidden sm:flex items-center gap-2 pl-3 border-l border-slate-200">
+                <span className="text-xs font-semibold text-slate-700 whitespace-nowrap">
+                  Conferência:{' '}
+                  <strong className="text-blue-700">
+                    {checkedExpensesCount} de {totalExpenses}
+                  </strong>{' '}
+                  lançamentos conferidos ({checkedExpensesPercent}%)
+                </span>
+                <div className="w-24">
+                  <Progress value={checkedExpensesPercent} className="h-2" />
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
@@ -801,6 +878,17 @@ export default function TripDetailPage() {
           </div>
         ) : (
           <div className="overflow-x-auto">
+            {/* Mobile progress indicator */}
+            {totalExpenses > 0 && (
+              <div className="sm:hidden px-4 py-2.5 bg-slate-50 border-b border-slate-100 flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-slate-700">
+                  Conferência: {checkedExpensesCount}/{totalExpenses} ({checkedExpensesPercent}%)
+                </span>
+                <div className="w-20">
+                  <Progress value={checkedExpensesPercent} className="h-2" />
+                </div>
+              </div>
+            )}
             <table className="w-full text-left text-xs text-slate-600">
               <thead className="bg-slate-50 border-b border-slate-200 uppercase text-[11px] font-semibold text-slate-500 tracking-wider">
                 <tr>
@@ -809,6 +897,7 @@ export default function TripDetailPage() {
                   <th className="py-3 px-4">Estabelecimento / Razão Social</th>
                   <th className="py-3 px-4 text-right">Valor</th>
                   <th className="py-3 px-4 text-center">Status Auditoria</th>
+                  <th className="py-3 px-4 text-center">Conferência Manual</th>
                   <th className="py-3 px-4 text-right">Ações</th>
                 </tr>
               </thead>
@@ -816,6 +905,8 @@ export default function TripDetailPage() {
                 {expenses.map((exp) => {
                   const catColor = CATEGORY_COLORS[exp.category]
                   const isDupe = exp.audit_flags?.includes('comprovante_duplicado')
+                  const isManuallyChecked = Boolean(exp.audit_manual_checked)
+                  const isBusy = checkingExpenseId === exp.id
 
                   return (
                     <tr
@@ -853,21 +944,102 @@ export default function TripDetailPage() {
                         {formatCurrencyBRL(exp.amount)}
                       </td>
 
+                      {/* Status Auditoria (pill com borda e diferenciação visual clara) */}
                       <td className="py-3.5 px-4 text-center">
-                        {exp.audit_status === 'conforme' && (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            Conforme
+                        <TooltipProvider delayDuration={200}>
+                          {isManuallyChecked ? (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-300 shadow-2xs">
+                                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                                  <span>Conforme (manual)</span>
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent className="text-xs max-w-xs space-y-1">
+                                <p className="font-semibold text-emerald-900">
+                                  ✓ Conferido e aprovado manualmente
+                                </p>
+                                {exp.audit_manual_checked_by_name && (
+                                  <p className="text-[11px] text-slate-600">
+                                    Auditor: <strong>{exp.audit_manual_checked_by_name}</strong>
+                                  </p>
+                                )}
+                                {exp.audit_manual_checked_at && (
+                                  <p className="text-[11px] text-slate-500">
+                                    Data/Hora:{' '}
+                                    {new Date(exp.audit_manual_checked_at).toLocaleString('pt-BR')}
+                                  </p>
+                                )}
+                              </TooltipContent>
+                            </Tooltip>
+                          ) : exp.audit_status === 'conforme' ? (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50/80 text-emerald-700 border border-emerald-200">
+                                  <Check className="w-3 h-3 text-emerald-600" />
+                                  <span>Conforme (motor)</span>
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent className="text-xs">
+                                Validado automaticamente pelo motor de regras
+                              </TooltipContent>
+                            </Tooltip>
+                          ) : exp.audit_status === 'justificado' ? (
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                              Justificado
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                              Pendente
+                            </span>
+                          )}
+                        </TooltipProvider>
+                      </td>
+
+                      {/* Botão de Conferência Manual: OK / Desfazer */}
+                      <td className="py-3.5 px-4 text-center" onClick={(e) => e.stopPropagation()}>
+                        {isTripLocked ? (
+                          <span
+                            className="inline-flex items-center gap-1 text-[11px] text-slate-400 font-medium cursor-not-allowed select-none"
+                            title="Viagem fechada — conferência bloqueada"
+                          >
+                            <Lock className="w-3 h-3 text-slate-400" />
+                            <span>Bloqueado</span>
                           </span>
-                        )}
-                        {exp.audit_status === 'justificado' && (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-                            Justificado
-                          </span>
-                        )}
-                        {exp.audit_status === 'pendente' && (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-                            Pendente
-                          </span>
+                        ) : isManuallyChecked ? (
+                          <div className="inline-flex items-center gap-1">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={isBusy}
+                              onClick={() => handleToggleManualAudit(exp, false)}
+                              className="h-7 px-2 text-[11px] font-medium border-slate-200 hover:border-amber-300 hover:bg-amber-50 hover:text-amber-800 text-slate-600 transition-colors"
+                              title="Clique para desfazer a conferência e voltar para pendente"
+                            >
+                              {isBusy ? (
+                                <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                              ) : (
+                                <X className="w-3 h-3 mr-1 text-slate-400 hover:text-amber-600" />
+                              )}
+                              <span>Desfazer</span>
+                            </Button>
+                          </div>
+                        ) : (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={isBusy}
+                            onClick={() => handleToggleManualAudit(exp, true)}
+                            className="h-7 px-2.5 text-[11px] font-semibold border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-600 hover:text-white hover:border-emerald-600 shadow-2xs transition-all"
+                            title="Confirmar conferência deste comprovante (marcar Conforme manualmente)"
+                          >
+                            {isBusy ? (
+                              <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                            ) : (
+                              <Check className="w-3.5 h-3.5 mr-1 text-emerald-600 group-hover:text-white" />
+                            )}
+                            <span>Confirmar OK</span>
+                          </Button>
                         )}
                       </td>
 
@@ -878,7 +1050,7 @@ export default function TripDetailPage() {
                             size="sm"
                             onClick={() => setViewingExpense(exp)}
                             className="h-7 w-7 p-0 text-slate-500 hover:text-blue-600"
-                            title="Visualizar Comprovante"
+                            title="Visualizar Comprovante (Segunda visualização)"
                           >
                             <Eye className="w-3.5 h-3.5" />
                           </Button>
@@ -1307,7 +1479,54 @@ export default function TripDetailPage() {
             </div>
           )}
 
-          <DialogFooter className="pt-3">
+          <DialogFooter className="pt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              {viewingExpense && (
+                <>
+                  {viewingExpense.audit_manual_checked ? (
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                        <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                        <span>Conforme (verificado manualmente)</span>
+                      </span>
+                      {!isTripLocked && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={checkingExpenseId === viewingExpense.id}
+                          onClick={() => handleToggleManualAudit(viewingExpense, false)}
+                          className="h-8 text-xs text-slate-500 hover:text-amber-700 hover:bg-amber-50"
+                        >
+                          {checkingExpenseId === viewingExpense.id ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
+                          ) : (
+                            <X className="w-3.5 h-3.5 mr-1" />
+                          )}
+                          Desfazer conferência
+                        </Button>
+                      )}
+                    </div>
+                  ) : (
+                    !isTripLocked && (
+                      <Button
+                        size="sm"
+                        disabled={checkingExpenseId === viewingExpense.id}
+                        onClick={() => handleToggleManualAudit(viewingExpense, true)}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs gap-1.5 shadow-sm font-semibold h-8"
+                      >
+                        {checkingExpenseId === viewingExpense.id ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Check className="w-4 h-4" />
+                        )}
+                        <span>Confirmar OK nesta conferência</span>
+                      </Button>
+                    )
+                  )}
+                </>
+              )}
+            </div>
+
             <Button
               variant="outline"
               size="sm"

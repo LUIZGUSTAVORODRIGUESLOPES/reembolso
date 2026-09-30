@@ -32,6 +32,7 @@ import {
   TRIP_STATUS_CONFIG,
 } from '@/lib/formatters'
 import { exportTripToExcel, exportConsolidatedReportPdf } from '@/services/reportExportService'
+import { reportEmailService, EmailProviderConfigStatus } from '@/services/reportEmailService'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -76,6 +77,11 @@ export default function ReportsPage() {
   const [attachReceipts, setAttachReceipts] = useState(true)
   const [sendingEmail, setSendingEmail] = useState(false)
   const [emailSentSuccess, setEmailSentSuccess] = useState(false)
+  const [providerStatus, setProviderStatus] = useState<EmailProviderConfigStatus>({
+    configured: false,
+    provider: null,
+  })
+  const [emailErrorMsg, setEmailErrorMsg] = useState<string | null>(null)
 
   const loadTrips = async () => {
     if (!user) {
@@ -85,8 +91,12 @@ export default function ReportsPage() {
 
     setLoading(true)
     try {
-      const all = await storageService.listTrips()
+      const [all, pStatus] = await Promise.all([
+        storageService.listTrips(),
+        reportEmailService.checkConfig(),
+      ])
       setTrips(all)
+      setProviderStatus(pStatus)
     } catch (err: any) {
       console.error('Falha ao carregar viagens em relatórios:', err)
       toast({
@@ -225,40 +235,113 @@ export default function ReportsPage() {
       )})`,
     )
     setEmailBody(
-      `Prezada equipe de Controladoria e Contas a Pagar,\n\nEncaminho em anexo a prestação de contas consolidada referente ao deslocamento para ${selectedTrip.destination}, realizado no período de ${formatDateRangeBR(selectedTrip.start_date, selectedTrip.end_date)}.\n\nMotivo da Viagem: ${selectedTrip.motivo}\nTotal Solicitado: ${formatCurrencyBRL(selectedTrip.total_amount)}\nTotal de Comprovantes Auditados: ${tripExpenses.length}\n\nTodos os comprovantes foram conferidos via OCR e auditados pelo motor de compliance.\n\nAtenciosamente,\n${collaboratorName}`,
+      `Prezada equipe de Controladoria e Contas a Pagar,\n\nEncaminho a prestação de contas consolidada referente ao deslocamento para ${selectedTrip.destination}, realizado no período de ${formatDateRangeBR(selectedTrip.start_date, selectedTrip.end_date)}.\n\nMotivo da Viagem: ${selectedTrip.motivo}\nTotal Solicitado: ${formatCurrencyBRL(selectedTrip.total_amount)}\nTotal de Comprovantes Auditados: ${tripExpenses.length}\n\nTodos os comprovantes foram conferidos via OCR e auditados pelo motor de compliance.\n\nAtenciosamente,\n${collaboratorName}`,
     )
     setEmailSentSuccess(false)
+    setEmailErrorMsg(null)
     setEmailModalOpen(true)
   }
 
-  const handleSendEmailSimulated = async () => {
+  const handleSendRealEmail = async () => {
+    if (!selectedTrip) return
     setSendingEmail(true)
-    await new Promise((r) => setTimeout(r, 1000))
-    setSendingEmail(false)
-    setEmailSentSuccess(true)
+    setEmailErrorMsg(null)
 
-    toast({
-      title: 'E-mail enviado com sucesso!',
-      description: `A prestação foi enviada para ${emailTo} com os anexos selecionados.`,
-    })
+    const collaboratorName =
+      selectedTrip.user_profile?.full_name ||
+      profile?.full_name ||
+      user?.user_metadata?.full_name ||
+      'Colaborador Solicitante'
 
-    setTimeout(() => {
-      setEmailModalOpen(false)
-      setEmailSentSuccess(false)
-    }, 1400)
+    try {
+      const result = await reportEmailService.sendReportEmail({
+        to: emailTo.trim(),
+        subject: emailSubject.trim(),
+        body: emailBody.trim(),
+        trip: selectedTrip,
+        expenses: tripExpenses,
+        collaboratorName,
+        attachPdf,
+        attachReceipts,
+      })
+
+      if (result.success) {
+        setEmailSentSuccess(true)
+        toast({
+          title: 'E-mail enviado com sucesso!',
+          description: `A prestação foi entregue com sucesso para ${emailTo}.`,
+        })
+        setTimeout(() => {
+          setEmailModalOpen(false)
+          setEmailSentSuccess(false)
+        }, 1600)
+      } else {
+        // Did not succeed — either provider not configured or provider error
+        setEmailErrorMsg(
+          result.message ||
+            result.error ||
+            'Não foi possível concluir o envio automático pelo servidor.',
+        )
+        toast({
+          title: result.configured ? 'Erro no envio de e-mail' : 'Provedor de e-mail pendente',
+          description: result.message || result.error || 'Verifique as instruções no modal.',
+          variant: 'destructive',
+        })
+      }
+    } catch (err: any) {
+      console.error('Falha ao enviar e-mail:', err)
+      setEmailErrorMsg(err?.message || 'Falha inesperada ao tentar despachar o e-mail.')
+      toast({
+        title: 'Erro inesperado no envio',
+        description: err?.message || 'Tente novamente ou utilize o cliente de e-mail local.',
+        variant: 'destructive',
+      })
+    } finally {
+      setSendingEmail(false)
+    }
+  }
+
+  const handleOpenClientMailTo = () => {
+    const link = reportEmailService.createMailToLink(emailTo, emailSubject, emailBody)
+    window.location.href = link
   }
 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900">
-          Relatórios & Prestação de Contas
-        </h2>
-        <p className="text-sm text-slate-500 mt-1 max-w-3xl">
-          Empacote processos de viagem concluídos ou auditados em relatórios consolidados unificados
-          (Excel, PDF consolidado com todos os comprovantes em sequência e envio direto por e-mail).
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900">
+            Relatórios & Prestação de Contas
+          </h2>
+          <p className="text-sm text-slate-500 mt-1 max-w-3xl">
+            Empacote processos de viagem concluídos ou auditados em relatórios consolidados
+            unificados (Excel, PDF consolidado com todos os comprovantes em sequência e envio direto
+            por e-mail).
+          </p>
+        </div>
+
+        {/* Status of Email Service Badge */}
+        <div className="shrink-0 flex items-center">
+          {providerStatus.configured ? (
+            <Badge
+              variant="outline"
+              className="bg-emerald-50 text-emerald-700 border-emerald-200 text-xs py-1 px-2.5 gap-1.5"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Envio de E-mail: Conectado ({providerStatus.provider || 'Resend'})</span>
+            </Badge>
+          ) : (
+            <Badge
+              variant="outline"
+              className="bg-amber-50 text-amber-800 border-amber-200 text-xs py-1 px-2.5 gap-1.5"
+              title="Para envios diretos via servidor, configure a chave RESEND_API_KEY no backend Supabase. O envio manual via app de e-mail e download de PDF continuam 100% funcionais."
+            >
+              <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+              <span>Provedor de E-mail: Pendente de Configuração</span>
+            </Badge>
+          )}
+        </div>
       </div>
 
       {/* Trips list ready for packaging */}
@@ -628,7 +711,7 @@ export default function ReportsPage() {
                     onCheckedChange={(checked) => setAttachPdf(!!checked)}
                   />
                   <Label htmlFor="attach_pdf" className="text-xs text-slate-600 cursor-pointer">
-                    Anexar relatório consolidado em PDF
+                    Anexar dados do relatório consolidado
                   </Label>
                 </div>
                 <div className="flex items-center gap-2">
@@ -641,10 +724,57 @@ export default function ReportsPage() {
                     htmlFor="attach_receipts"
                     className="text-xs text-slate-600 cursor-pointer"
                   >
-                    Anexar recibos originais ({tripExpenses.length} arquivos)
+                    Incluir sumário detalhado dos comprovantes ({tripExpenses.length} itens)
                   </Label>
                 </div>
               </div>
+
+              {/* Provider Status or Error Banner */}
+              {emailErrorMsg ? (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs space-y-2">
+                  <div className="flex items-start gap-2 text-amber-900 font-semibold">
+                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <span>Atenção: envio direto pelo servidor indisponível</span>
+                  </div>
+                  <p className="text-amber-800 text-[11px] leading-relaxed">{emailErrorMsg}</p>
+                  <div className="pt-1 flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleOpenClientMailTo}
+                      className="bg-white border-amber-300 text-amber-900 hover:bg-amber-100 text-[11px] h-7"
+                    >
+                      <Mail className="w-3 h-3 mr-1.5" />
+                      Abrir no meu aplicativo de e-mail (Outlook / Mail)
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleExportPdf}
+                      className="bg-white border-amber-300 text-amber-900 hover:bg-amber-100 text-[11px] h-7"
+                    >
+                      <Download className="w-3 h-3 mr-1.5" />
+                      Baixar PDF para anexar
+                    </Button>
+                  </div>
+                </div>
+              ) : !providerStatus.configured ? (
+                <div className="bg-blue-50/70 border border-blue-200 rounded-lg p-2.5 text-[11px] text-blue-900 flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-semibold block">Configuração de Provedor de E-mail</span>
+                    <span>
+                      Para envio automatizado direto pelo servidor, configure a chave{' '}
+                      <code className="bg-blue-100 px-1 py-0.5 rounded text-[10px] font-mono">
+                        RESEND_API_KEY
+                      </code>{' '}
+                      no backend. Você também pode disparar via cliente de e-mail local.
+                    </span>
+                  </div>
+                </div>
+              ) : null}
 
               <DialogFooter className="pt-2 gap-2">
                 <Button
@@ -656,14 +786,18 @@ export default function ReportsPage() {
                 >
                   Cancelar
                 </Button>
+
                 <Button
                   size="sm"
-                  onClick={handleSendEmailSimulated}
+                  onClick={handleSendRealEmail}
                   disabled={sendingEmail || !emailTo.trim()}
                   className="bg-[#1e40af] hover:bg-[#1d3d9e] text-white text-xs gap-1.5"
                 >
                   {sendingEmail ? (
-                    'Enviando...'
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Enviando pelo Servidor...</span>
+                    </>
                   ) : (
                     <>
                       <Send className="w-3.5 h-3.5" />

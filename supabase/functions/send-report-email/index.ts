@@ -163,17 +163,20 @@ ${messageBody}
     const resendData = await resendResponse.json()
 
     if (!resendResponse.ok) {
-      console.error('Erro retornado pela API Resend:', resendData)
+      console.error('Erro retornado pela API Resend:', resendResponse.status, resendData)
       return new Response(
         JSON.stringify({
           success: false,
           configured: true,
-          error: resendData?.message || 'Falha ao enviar através do serviço de e-mail',
+          statusCode: resendResponse.status,
+          error:
+            resendData?.message || `Falha no serviço de e-mail (código ${resendResponse.status})`,
+          name: resendData?.name,
           details: resendData,
         }),
         {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          status: 400,
+          status: 200,
         },
       )
     }
@@ -195,11 +198,12 @@ ${messageBody}
     return new Response(
       JSON.stringify({
         success: false,
+        configured: Boolean(Deno.env.get('RESEND_API_KEY')),
         error: err?.message || 'Erro inesperado no servidor de envio',
       }),
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 500,
+        status: 200,
       },
     )
   }

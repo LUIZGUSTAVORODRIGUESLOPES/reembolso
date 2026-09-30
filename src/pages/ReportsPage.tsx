@@ -19,6 +19,7 @@ import {
   FileCheck2,
   Loader2,
   AlertCircle,
+  RefreshCw,
 } from 'lucide-react'
 import { storageService } from '@/services/storageService'
 import { resolveReceiptUrl } from '@/services/receiptFileResolver'
@@ -77,11 +78,49 @@ export default function ReportsPage() {
   const [attachReceipts, setAttachReceipts] = useState(true)
   const [sendingEmail, setSendingEmail] = useState(false)
   const [emailSentSuccess, setEmailSentSuccess] = useState(false)
+  const [checkingProvider, setCheckingProvider] = useState(false)
   const [providerStatus, setProviderStatus] = useState<EmailProviderConfigStatus>({
     configured: false,
     provider: null,
   })
   const [emailErrorMsg, setEmailErrorMsg] = useState<string | null>(null)
+  const [emailErrorAction, setEmailErrorAction] = useState<string | null>(null)
+  const [emailRawError, setEmailRawError] = useState<string | null>(null)
+
+  const checkProviderConfig = async (notify: boolean = false) => {
+    setCheckingProvider(true)
+    try {
+      const pStatus = await reportEmailService.checkConfig()
+      setProviderStatus(pStatus)
+      if (notify) {
+        if (pStatus.configured) {
+          toast({
+            title: 'Provedor de e-mail conectado!',
+            description: `O serviço ${pStatus.provider || 'Resend'} está configurado e pronto para envio direto.`,
+          })
+        } else {
+          toast({
+            title: 'Provedor ainda não configurado',
+            description: 'A chave RESEND_API_KEY ainda não foi detectada no backend.',
+            variant: 'destructive',
+          })
+        }
+      }
+      return pStatus
+    } catch (err: any) {
+      console.warn('Erro ao verificar provedor de e-mail:', err)
+      if (notify) {
+        toast({
+          title: 'Erro ao verificar provedor',
+          description: err?.message || 'Não foi possível consultar a Edge Function.',
+          variant: 'destructive',
+        })
+      }
+      return { configured: false, provider: null }
+    } finally {
+      setCheckingProvider(false)
+    }
+  }
 
   const loadTrips = async () => {
     if (!user) {
@@ -239,13 +278,22 @@ export default function ReportsPage() {
     )
     setEmailSentSuccess(false)
     setEmailErrorMsg(null)
+    setEmailErrorAction(null)
+    setEmailRawError(null)
     setEmailModalOpen(true)
+    // Revalida em segundo plano ao abrir o modal para garantir status atualizado
+    checkProviderConfig(false)
   }
 
   const handleSendRealEmail = async () => {
     if (!selectedTrip) return
     setSendingEmail(true)
     setEmailErrorMsg(null)
+    setEmailErrorAction(null)
+    setEmailRawError(null)
+
+    // Revalidar o status do provedor na hora do envio (não confiar apenas no mount)
+    const currentConfig = await checkProviderConfig(false)
 
     const collaboratorName =
       selectedTrip.user_profile?.full_name ||
@@ -278,19 +326,28 @@ export default function ReportsPage() {
       } else {
         // Did not succeed — either provider not configured or provider error
         setEmailErrorMsg(
-          result.message ||
-            result.error ||
+          result.error ||
+            result.message ||
             'Não foi possível concluir o envio automático pelo servidor.',
         )
+        setEmailErrorAction(result.errorAction || null)
+        setEmailRawError(result.rawError || null)
         toast({
-          title: result.configured ? 'Erro no envio de e-mail' : 'Provedor de e-mail pendente',
-          description: result.message || result.error || 'Verifique as instruções no modal.',
+          title:
+            result.configured || currentConfig.configured
+              ? 'Erro no envio de e-mail'
+              : 'Provedor de e-mail pendente',
+          description: result.error || result.message || 'Verifique as instruções no modal.',
           variant: 'destructive',
         })
       }
     } catch (err: any) {
       console.error('Falha ao enviar e-mail:', err)
       setEmailErrorMsg(err?.message || 'Falha inesperada ao tentar despachar o e-mail.')
+      setEmailErrorAction(
+        'Verifique sua conexão e tente novamente ou utilize o cliente de e-mail local.',
+      )
+      setEmailRawError(err?.message || null)
       toast({
         title: 'Erro inesperado no envio',
         description: err?.message || 'Tente novamente ou utilize o cliente de e-mail local.',
@@ -322,7 +379,7 @@ export default function ReportsPage() {
         </div>
 
         {/* Status of Email Service Badge */}
-        <div className="shrink-0 flex items-center">
+        <div className="shrink-0 flex items-center gap-2">
           {providerStatus.configured ? (
             <Badge
               variant="outline"
@@ -341,6 +398,21 @@ export default function ReportsPage() {
               <span>Provedor de E-mail: Pendente de Configuração</span>
             </Badge>
           )}
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => checkProviderConfig(true)}
+            disabled={checkingProvider}
+            title="Revalidar status do serviço de e-mail"
+            className="h-8 px-2 text-xs text-slate-600 hover:text-slate-900 border border-slate-200 hover:bg-slate-50 gap-1"
+          >
+            <RefreshCw
+              className={`w-3.5 h-3.5 ${checkingProvider ? 'animate-spin text-blue-600' : ''}`}
+            />
+            <span className="hidden sm:inline">Verificar novamente</span>
+          </Button>
         </div>
       </div>
 
@@ -732,11 +804,48 @@ export default function ReportsPage() {
               {/* Provider Status or Error Banner */}
               {emailErrorMsg ? (
                 <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs space-y-2">
-                  <div className="flex items-start gap-2 text-amber-900 font-semibold">
-                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                    <span>Atenção: envio direto pelo servidor indisponível</span>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-start gap-2 text-amber-900 font-semibold">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <span>
+                        {providerStatus.configured
+                          ? 'Falha no envio pelo servidor de e-mail'
+                          : 'Envio direto pelo servidor indisponível'}
+                      </span>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => checkProviderConfig(true)}
+                      disabled={checkingProvider}
+                      className="h-6 px-1.5 text-[11px] text-amber-800 hover:text-amber-950 hover:bg-amber-100 gap-1"
+                      title="Reconsultar status do provedor"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${checkingProvider ? 'animate-spin' : ''}`} />
+                      <span>Reverificar</span>
+                    </Button>
                   </div>
-                  <p className="text-amber-800 text-[11px] leading-relaxed">{emailErrorMsg}</p>
+
+                  <p className="text-amber-900 text-xs font-medium leading-relaxed">
+                    {emailErrorMsg}
+                  </p>
+
+                  {emailErrorAction && (
+                    <div className="p-2 bg-white/70 rounded border border-amber-200 text-[11px] text-amber-800">
+                      <strong>Como resolver:</strong> {emailErrorAction}
+                    </div>
+                  )}
+
+                  {emailRawError && emailRawError !== emailErrorMsg && (
+                    <details className="text-[10px] text-amber-700 cursor-pointer pt-0.5">
+                      <summary className="font-semibold">Ver detalhes técnicos do erro</summary>
+                      <pre className="mt-1 p-1.5 bg-amber-100/60 rounded text-[10px] overflow-x-auto whitespace-pre-wrap font-mono">
+                        {emailRawError}
+                      </pre>
+                    </details>
+                  )}
+
                   <div className="pt-1 flex flex-wrap items-center gap-2">
                     <Button
                       type="button"
@@ -761,20 +870,58 @@ export default function ReportsPage() {
                   </div>
                 </div>
               ) : !providerStatus.configured ? (
-                <div className="bg-blue-50/70 border border-blue-200 rounded-lg p-2.5 text-[11px] text-blue-900 flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
-                  <div>
-                    <span className="font-semibold block">Configuração de Provedor de E-mail</span>
+                <div className="bg-blue-50/70 border border-blue-200 rounded-lg p-2.5 text-[11px] text-blue-900 flex items-start justify-between gap-2">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-semibold block">
+                        Configuração de Provedor de E-mail
+                      </span>
+                      <span>
+                        Para envio automatizado direto pelo servidor, configure a chave{' '}
+                        <code className="bg-blue-100 px-1 py-0.5 rounded text-[10px] font-mono">
+                          RESEND_API_KEY
+                        </code>{' '}
+                        no backend. Você também pode disparar via cliente de e-mail local.
+                      </span>
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => checkProviderConfig(true)}
+                    disabled={checkingProvider}
+                    className="h-6 px-1.5 text-[11px] text-blue-800 hover:text-blue-950 hover:bg-blue-100 shrink-0 gap-1"
+                    title="Reconsultar status do provedor"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${checkingProvider ? 'animate-spin' : ''}`} />
+                    <span>Verificar</span>
+                  </Button>
+                </div>
+              ) : (
+                <div className="bg-emerald-50/70 border border-emerald-200 rounded-lg p-2.5 text-[11px] text-emerald-900 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                     <span>
-                      Para envio automatizado direto pelo servidor, configure a chave{' '}
-                      <code className="bg-blue-100 px-1 py-0.5 rounded text-[10px] font-mono">
-                        RESEND_API_KEY
-                      </code>{' '}
-                      no backend. Você também pode disparar via cliente de e-mail local.
+                      Servidor de e-mail conectado via{' '}
+                      <strong>{providerStatus.provider || 'Resend'}</strong>
+                      {providerStatus.sender ? ` (remetente: ${providerStatus.sender})` : ''}.
                     </span>
                   </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => checkProviderConfig(true)}
+                    disabled={checkingProvider}
+                    className="h-6 px-1.5 text-[11px] text-emerald-800 hover:text-emerald-950 hover:bg-emerald-100 shrink-0 gap-1"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${checkingProvider ? 'animate-spin' : ''}`} />
+                    <span>Reverificar</span>
+                  </Button>
                 </div>
-              ) : null}
+              )}
 
               <DialogFooter className="pt-2 gap-2">
                 <Button

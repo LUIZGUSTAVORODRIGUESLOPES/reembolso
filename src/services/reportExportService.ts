@@ -356,3 +356,381 @@ export async function exportConsolidatedReportPdf(
     }
   }
 }
+
+/**
+ * Loads jsPDF dynamically from CDN if not already on window.
+ */
+async function loadJsPdfLibrary(): Promise<any> {
+  const w = window as any
+  if (w.jspdf && w.jspdf.jsPDF) {
+    return w.jspdf.jsPDF
+  }
+  if (w.jsPDF) {
+    return w.jsPDF
+  }
+
+  return new Promise((resolve, reject) => {
+    // Check if script element already exists
+    const existing = document.querySelector('script[data-lib="jspdf"]')
+    if (existing) {
+      existing.addEventListener('load', () => {
+        const jsPDFClass = (window as any).jspdf?.jsPDF || (window as any).jsPDF
+        if (jsPDFClass) resolve(jsPDFClass)
+        else reject(new Error('Falha ao carregar a biblioteca jsPDF.'))
+      })
+      existing.addEventListener('error', () =>
+        reject(new Error('Erro ao carregar script do jsPDF.')),
+      )
+      return
+    }
+
+    const script = document.createElement('script')
+    script.setAttribute('data-lib', 'jspdf')
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'
+    script.crossOrigin = 'anonymous'
+    script.onload = () => {
+      const jsPDFClass = (window as any).jspdf?.jsPDF || (window as any).jsPDF
+      if (jsPDFClass) {
+        resolve(jsPDFClass)
+      } else {
+        reject(new Error('jsPDF carregado mas objeto window.jspdf.jsPDF não encontrado.'))
+      }
+    }
+    script.onerror = () => reject(new Error('Falha de conexão ao baixar jsPDF via CDN.'))
+    document.head.appendChild(script)
+  })
+}
+
+/**
+ * Builds a real binary PDF file (Blob) using jsPDF containing:
+ * - Cover/summary page with corporate branding, trip details, itemized table and totals
+ * - Subsequent pages each with an attached, audited receipt image nicely framed
+ */
+export async function generateConsolidatedReportBlob(
+  trip: Trip,
+  expenses: Expense[],
+  collaboratorName?: string,
+  onProgress?: (current: number, total: number, message: string) => void,
+): Promise<{ blob: Blob; filename: string }> {
+  const JsPDFClass = await loadJsPdfLibrary()
+  const doc = new JsPDFClass({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+    compress: true,
+  })
+
+  const pageWidth = doc.internal.pageSize.getWidth() // 210mm
+  const pageHeight = doc.internal.pageSize.getHeight() // 297mm
+  const margin = 15
+  const contentWidth = pageWidth - margin * 2
+
+  // --- PAGE 1: Executive Summary & Itemized Table ---
+  // Header banner
+  doc.setFillColor(30, 64, 175) // #1e40af
+  doc.rect(margin, margin, contentWidth, 18, 'F')
+  doc.setTextColor(255, 255, 255)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(14)
+  doc.text('REEMBOLSO.AI CORPORATIVO', margin + 6, margin + 8)
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(8.5)
+  doc.text('Prestação de Contas e Relatório de Despesas de Viagem', margin + 6, margin + 14)
+
+  // Status badge
+  const statusStr = (trip.status || 'CONCLUÍDO').toUpperCase()
+  doc.setFillColor(255, 255, 255)
+  doc.roundedRect(pageWidth - margin - 32, margin + 4.5, 28, 8, 2, 2, 'F')
+  doc.setTextColor(30, 64, 175)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(7.5)
+  doc.text(statusStr, pageWidth - margin - 18, margin + 9.5, { align: 'center' })
+
+  // Metadata Card
+  let curY = margin + 24
+  doc.setFillColor(248, 250, 252) // #f8fafc
+  doc.setDrawColor(226, 232, 240) // #e2e8f0
+  doc.roundedRect(margin, curY, contentWidth, 34, 2, 2, 'FD')
+
+  doc.setTextColor(15, 23, 42)
+  doc.setFontSize(9)
+
+  // Left column
+  doc.setFont('helvetica', 'bold')
+  doc.text('Destino:', margin + 4, curY + 7)
+  doc.setFont('helvetica', 'normal')
+  doc.text(trip.destination, margin + 20, curY + 7)
+
+  doc.setFont('helvetica', 'bold')
+  doc.text('Período:', margin + 4, curY + 14)
+  doc.setFont('helvetica', 'normal')
+  doc.text(formatDateRangeBR(trip.start_date, trip.end_date), margin + 20, curY + 14)
+
+  doc.setFont('helvetica', 'bold')
+  doc.text('Transporte:', margin + 4, curY + 21)
+  doc.setFont('helvetica', 'normal')
+  doc.text(trip.transport_type, margin + 24, curY + 21)
+
+  // Right column
+  const rightColX = margin + contentWidth / 2 + 2
+  doc.setFont('helvetica', 'bold')
+  doc.text('Solicitante:', rightColX, curY + 7)
+  doc.setFont('helvetica', 'normal')
+  const solName = collaboratorName || trip.user_profile?.full_name || 'Colaborador Solicitante'
+  doc.text(solName, rightColX + 22, curY + 7)
+
+  doc.setFont('helvetica', 'bold')
+  doc.text('Motivo:', rightColX, curY + 14)
+  doc.setFont('helvetica', 'normal')
+  const motivoShort = trip.motivo
+    ? trip.motivo.length > 36
+      ? trip.motivo.substring(0, 36) + '...'
+      : trip.motivo
+    : 'Viagem Corporativa'
+  doc.text(motivoShort, rightColX + 16, curY + 14)
+
+  doc.setFont('helvetica', 'bold')
+  doc.text('Comprovantes:', rightColX, curY + 21)
+  doc.setFont('helvetica', 'normal')
+  doc.text(`${expenses.length} anexos auditados`, rightColX + 28, curY + 21)
+
+  doc.setFont('helvetica', 'bold')
+  doc.text('Fechamento:', rightColX, curY + 28)
+  doc.setFont('helvetica', 'normal')
+  doc.text(new Date().toLocaleDateString('pt-BR'), rightColX + 24, curY + 28)
+
+  curY += 40
+
+  // Table Title
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(9)
+  doc.setTextColor(51, 65, 85)
+  doc.text(`DETALHAMENTO CRONOLÓGICO DAS DESPESAS (${expenses.length} COMPROVANTES)`, margin, curY)
+  curY += 4
+
+  // Table Header
+  doc.setFillColor(241, 245, 249)
+  doc.rect(margin, curY, contentWidth, 7, 'F')
+  doc.setDrawColor(203, 213, 225)
+  doc.line(margin, curY + 7, margin + contentWidth, curY + 7)
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(7.5)
+  doc.setTextColor(71, 85, 105)
+  doc.text('DATA', margin + 3, curY + 4.8)
+  doc.text('CATEGORIA', margin + 26, curY + 4.8)
+  doc.text('ESTABELECIMENTO', margin + 65, curY + 4.8)
+  doc.text('VALOR (R$)', margin + contentWidth - 30, curY + 4.8, { align: 'right' })
+  doc.text('STATUS', margin + contentWidth - 4, curY + 4.8, { align: 'right' })
+
+  curY += 7
+
+  // Table rows
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(7.5)
+  doc.setTextColor(15, 23, 42)
+
+  expenses.forEach((exp, idx) => {
+    // Check if near page boundary
+    if (curY > pageHeight - 35) {
+      doc.addPage()
+      curY = margin
+    }
+
+    if (idx % 2 === 1) {
+      doc.setFillColor(248, 250, 252)
+      doc.rect(margin, curY, contentWidth, 6.5, 'F')
+    }
+
+    doc.text(formatDateBR(exp.issue_date), margin + 3, curY + 4.5)
+    doc.text(CATEGORY_LABELS[exp.category] || exp.category, margin + 26, curY + 4.5)
+
+    const merch = exp.merchant_name || 'Despesa'
+    const merchDisplay = merch.length > 34 ? merch.substring(0, 32) + '...' : merch
+    doc.text(merchDisplay, margin + 65, curY + 4.5)
+
+    doc.setFont('helvetica', 'bold')
+    doc.setTextColor(16, 185, 129) // emerald-600
+    doc.text(formatCurrencyBRL(exp.amount), margin + contentWidth - 30, curY + 4.5, {
+      align: 'right',
+    })
+
+    doc.setFont('helvetica', 'normal')
+    doc.setTextColor(100, 116, 139)
+    doc.text(
+      (exp.audit_status || 'conforme').toUpperCase(),
+      margin + contentWidth - 4,
+      curY + 4.5,
+      {
+        align: 'right',
+      },
+    )
+    doc.setTextColor(15, 23, 42)
+
+    curY += 6.5
+  })
+
+  // Table Total Footer
+  curY += 3
+  doc.setDrawColor(203, 213, 225)
+  doc.line(margin, curY, margin + contentWidth, curY)
+  curY += 6
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(9)
+  doc.setTextColor(71, 85, 105)
+  doc.text('TOTAL GERAL REEMBOLSÁVEL:', margin + contentWidth - 65, curY)
+  doc.setTextColor(16, 185, 129)
+  doc.setFontSize(12)
+  doc.text(formatCurrencyBRL(trip.total_amount), margin + contentWidth - 2, curY, {
+    align: 'right',
+  })
+
+  // Signatures at bottom of page 1 if room, otherwise bottom of page
+  const sigY = Math.max(curY + 22, pageHeight - 32)
+  if (sigY <= pageHeight - 15) {
+    doc.setDrawColor(203, 213, 225)
+    doc.line(margin + 5, sigY, margin + 70, sigY)
+    doc.line(pageWidth - margin - 70, sigY, pageWidth - margin - 5, sigY)
+
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(7)
+    doc.setTextColor(100, 116, 139)
+    doc.text('Assinatura do Solicitante', margin + 37.5, sigY + 4, { align: 'center' })
+    doc.text('Gestor / Auditor Financeiro', pageWidth - margin - 37.5, sigY + 4, {
+      align: 'center',
+    })
+  }
+
+  // --- SUBSEQUENT PAGES: Receipt Attachments Rasterized ---
+  const total = expenses.length
+  for (let i = 0; i < total; i++) {
+    const exp = expenses[i]
+    onProgress?.(
+      i + 1,
+      total,
+      `Rasterizando comprovante ${i + 1} de ${total}: ${exp.merchant_name}`,
+    )
+
+    let att: PreparedReceiptAttachment
+    try {
+      att = await prepareReceiptAttachment(exp)
+    } catch (err: any) {
+      att = {
+        expenseId: exp.id,
+        fileName: exp.file_name,
+        merchantName: exp.merchant_name,
+        issueDate: exp.issue_date,
+        amount: exp.amount,
+        category: exp.category,
+        status: 'error',
+        errorMessage: err?.message || 'Falha ao processar arquivo.',
+        pages: [],
+      }
+    }
+
+    if (att.status === 'error' || att.pages.length === 0) {
+      doc.addPage()
+      // Error banner
+      doc.setFillColor(254, 242, 242)
+      doc.rect(margin, margin, contentWidth, 24, 'F')
+      doc.setDrawColor(239, 68, 68)
+      doc.rect(margin, margin, contentWidth, 24, 'D')
+
+      doc.setFont('helvetica', 'bold')
+      doc.setTextColor(185, 28, 28)
+      doc.setFontSize(10)
+      doc.text(`Anexo ${i + 1} de ${total} — ${att.fileName}`, margin + 6, margin + 8)
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(8)
+      doc.text(
+        `${att.merchantName} • ${formatDateBR(att.issueDate)} • ${formatCurrencyBRL(att.amount)}`,
+        margin + 6,
+        margin + 14,
+      )
+      doc.setTextColor(153, 27, 27)
+      doc.text(
+        `Comprovante não disponível no momento: ${att.errorMessage || 'Arquivo corrompido ou ausente.'}`,
+        margin + 6,
+        margin + 20,
+      )
+      continue
+    }
+
+    // Embed each rendered page of the receipt
+    for (let pIdx = 0; pIdx < att.pages.length; pIdx++) {
+      const page = att.pages[pIdx]
+      doc.addPage()
+
+      // Header on attachment page
+      doc.setFillColor(241, 245, 249)
+      doc.rect(margin, margin, contentWidth, 16, 'F')
+      doc.setDrawColor(203, 213, 225)
+      doc.rect(margin, margin, contentWidth, 16, 'D')
+
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(9.5)
+      doc.setTextColor(30, 64, 175)
+      const pageInfo = att.pages.length > 1 ? ` (Pág ${pIdx + 1}/${att.pages.length})` : ''
+      doc.text(`Anexo ${i + 1} de ${total}: ${att.fileName}${pageInfo}`, margin + 5, margin + 6.5)
+
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(8)
+      doc.setTextColor(71, 85, 105)
+      doc.text(
+        `${att.merchantName} • Data: ${formatDateBR(att.issueDate)} • Valor: ${formatCurrencyBRL(att.amount)}`,
+        margin + 5,
+        margin + 12,
+      )
+
+      // Verified badge
+      doc.setFillColor(219, 234, 254)
+      doc.roundedRect(pageWidth - margin - 38, margin + 3.5, 34, 8.5, 2, 2, 'F')
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(7)
+      doc.setTextColor(30, 64, 175)
+      doc.text('AUDITADO OCR', pageWidth - margin - 21, margin + 8.5, { align: 'center' })
+
+      // Calculate image display bounds
+      const availWidth = contentWidth
+      const availHeight = pageHeight - margin * 2 - 28 // Leave margin + header + footer
+      const imgAspect = page.width / page.height
+
+      let renderW = availWidth
+      let renderH = renderW / imgAspect
+      if (renderH > availHeight) {
+        renderH = availHeight
+        renderW = renderH * imgAspect
+      }
+
+      const imgX = margin + (availWidth - renderW) / 2
+      const imgY = margin + 20
+
+      // White frame behind receipt
+      doc.setFillColor(255, 255, 255)
+      doc.setDrawColor(203, 213, 225)
+      doc.roundedRect(imgX - 1.5, imgY - 1.5, renderW + 3, renderH + 3, 1, 1, 'FD')
+
+      try {
+        doc.addImage(page.dataUrl, 'JPEG', imgX, imgY, renderW, renderH, undefined, 'FAST')
+      } catch (addImgErr) {
+        console.warn('Erro ao inserir imagem no jsPDF:', addImgErr)
+      }
+
+      // Footer
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(7)
+      doc.setTextColor(148, 163, 184)
+      doc.text(
+        'Comprovante digitalizado e auditado pelo motor de compliance Reembolso.ai Corporativo',
+        pageWidth / 2,
+        pageHeight - 6,
+        { align: 'center' },
+      )
+    }
+  }
+
+  const rawFilename = `relatorio_prestacao_${trip.destination.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${trip.start_date}.pdf`
+  const blob = doc.output('blob')
+  return { blob, filename: rawFilename }
+}

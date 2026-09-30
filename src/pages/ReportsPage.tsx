@@ -86,6 +86,8 @@ export default function ReportsPage() {
   const [emailErrorMsg, setEmailErrorMsg] = useState<string | null>(null)
   const [emailErrorAction, setEmailErrorAction] = useState<string | null>(null)
   const [emailRawError, setEmailRawError] = useState<string | null>(null)
+  const [emailSendingStep, setEmailSendingStep] = useState<string | null>(null)
+  const [attachedFilesNames, setAttachedFilesNames] = useState<string[]>([])
 
   const checkProviderConfig = async (notify: boolean = false) => {
     setCheckingProvider(true)
@@ -280,6 +282,8 @@ export default function ReportsPage() {
     setEmailErrorMsg(null)
     setEmailErrorAction(null)
     setEmailRawError(null)
+    setEmailSendingStep(null)
+    setAttachedFilesNames([])
     setEmailModalOpen(true)
     // Revalida em segundo plano ao abrir o modal para garantir status atualizado
     checkProviderConfig(false)
@@ -291,6 +295,7 @@ export default function ReportsPage() {
     setEmailErrorMsg(null)
     setEmailErrorAction(null)
     setEmailRawError(null)
+    setEmailSendingStep('Validando configuração do serviço...')
 
     // Revalidar o status do provedor na hora do envio (não confiar apenas no mount)
     const currentConfig = await checkProviderConfig(false)
@@ -311,18 +316,25 @@ export default function ReportsPage() {
         collaboratorName,
         attachPdf,
         attachReceipts,
+        onProgress: (stepText) => {
+          setEmailSendingStep(stepText)
+        },
       })
 
       if (result.success) {
         setEmailSentSuccess(true)
+        setAttachedFilesNames(
+          result.attachedFiles || (attachPdf ? ['relatorio_prestacao_contas.pdf'] : []),
+        )
         toast({
           title: 'E-mail enviado com sucesso!',
-          description: `A prestação foi entregue com sucesso para ${emailTo}.`,
+          description: `A prestação de contas foi entregue com o PDF consolidado para ${emailTo}.`,
         })
         setTimeout(() => {
           setEmailModalOpen(false)
           setEmailSentSuccess(false)
-        }, 1600)
+          setEmailSendingStep(null)
+        }, 2200)
       } else {
         // Did not succeed — either provider not configured or provider error
         setEmailErrorMsg(
@@ -736,9 +748,16 @@ export default function ReportsPage() {
                 <CheckCircle2 className="w-8 h-8 animate-in zoom-in-75 duration-300" />
               </div>
               <h4 className="font-bold text-slate-900 text-base">E-mail enviado com sucesso!</h4>
-              <p className="text-xs text-slate-500">
-                A prestação de contas foi despachada para {emailTo}.
+              <p className="text-xs text-slate-600 max-w-sm mx-auto">
+                A prestação de contas foi despachada para <strong>{emailTo}</strong> acompanhada do{' '}
+                <strong>relatório consolidado em PDF</strong> com todos os comprovantes anexados.
               </p>
+              {attachedFilesNames.length > 0 && (
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-md text-xs font-medium">
+                  <FileText className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Anexo enviado: {attachedFilesNames.join(', ')}</span>
+                </div>
+              )}
             </div>
           ) : (
             <div className="space-y-3 pt-2">
@@ -780,10 +799,14 @@ export default function ReportsPage() {
                   <Checkbox
                     id="attach_pdf"
                     checked={attachPdf}
+                    disabled={sendingEmail}
                     onCheckedChange={(checked) => setAttachPdf(!!checked)}
                   />
-                  <Label htmlFor="attach_pdf" className="text-xs text-slate-600 cursor-pointer">
-                    Anexar dados do relatório consolidado
+                  <Label
+                    htmlFor="attach_pdf"
+                    className="text-xs text-slate-700 cursor-pointer font-medium"
+                  >
+                    Anexar PDF consolidado do relatório (inclui todos os comprovantes rasterizados)
                   </Label>
                 </div>
                 <div className="flex items-center gap-2">
@@ -920,6 +943,16 @@ export default function ReportsPage() {
                     <RefreshCw className={`w-3 h-3 ${checkingProvider ? 'animate-spin' : ''}`} />
                     <span>Reverificar</span>
                   </Button>
+                </div>
+              )}
+
+              {sendingEmail && emailSendingStep && (
+                <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs space-y-1.5">
+                  <div className="flex items-center gap-2 text-blue-900 font-semibold">
+                    <Loader2 className="w-3.5 h-3.5 text-blue-600 animate-spin" />
+                    <span>Processando envio com anexo PDF...</span>
+                  </div>
+                  <p className="text-[11px] text-blue-700 leading-snug pl-5">{emailSendingStep}</p>
                 </div>
               )}
 

@@ -1,6 +1,6 @@
 import { supabase } from '@/lib/supabase/client'
 import { Trip, Expense } from '@/types/database'
-import { formatDateRangeBR, formatCurrencyBRL } from '@/lib/formatters'
+import { generateConsolidatedReportBlob } from './reportExportService'
 
 export interface EmailProviderConfigStatus {
   configured: boolean
@@ -17,6 +17,7 @@ export interface SendReportEmailParams {
   collaboratorName?: string
   attachPdf?: boolean
   attachReceipts?: boolean
+  onProgress?: (step: string) => void
 }
 
 export interface SendReportEmailResult {
@@ -28,6 +29,7 @@ export interface SendReportEmailResult {
   rawError?: string
   errorAction?: string
   details?: any
+  attachedFiles?: string[]
   mailToFallback?: {
     to: string
     subject: string
@@ -44,6 +46,23 @@ export function formatResendError(
   statusCode?: number,
 ): { message: string; action?: string } {
   const lower = (rawMsg || '').toLowerCase()
+
+  // Erro de tamanho excessivo de anexos
+  if (
+    lower.includes('excede o limite') ||
+    lower.includes('too large') ||
+    lower.includes('payload too large') ||
+    lower.includes('413') ||
+    (lower.includes('attachment') && lower.includes('limit'))
+  ) {
+    return {
+      message:
+        rawMsg ||
+        'O tamanho total dos anexos ultrapassa o limite permitido para envio direto por e-mail.',
+      action:
+        'Baixe o PDF consolidado pelo botão no app e envie manualmente através do seu cliente de e-mail (Outlook / Mail).',
+    }
+  }
 
   // Erro 403: Domínio não verificado / Restrição da conta de teste do Resend
   if (
@@ -113,6 +132,22 @@ export function formatResendError(
   }
 }
 
+/**
+ * Converte um Blob em string Base64 limpa (sem data URL prefix)
+ */
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      const res = reader.result as string
+      const base64 = res.includes('base64,') ? res.split('base64,')[1] : res
+      resolve(base64)
+    }
+    reader.onerror = reject
+    reader.readAsDataURL(blob)
+  })
+}
+
 class ReportEmailService {
   /**
    * Checks whether an external email service (e.g. Resend) is configured in the Supabase backend.
@@ -139,13 +174,117 @@ class ReportEmailService {
   }
 
   /**
-   * Sends the trip report by email via the backend Edge Function or returns clear fallback diagnostics.
+   * Sends the trip report by email via the backend Edge Function,
+   * including the consolidated PDF as an attachment.
    */
   async sendReportEmail(params: SendReportEmailParams): Promise<SendReportEmailResult> {
-    const { to, subject, body, trip, expenses, collaboratorName } = params
+    const {
+      to,
+      subject,
+      body,
+      trip,
+      expenses,
+      collaboratorName,
+      attachPdf = true,
+      onProgress,
+    } = params
 
     try {
-      const payload = {
+      let storageAttachmentPayload: {
+        bucket: string
+        path: string
+        filename: string
+        cleanupAfterSend: boolean
+      } | null = null
+
+      let directAttachmentsPayload: Array<{ filename: string; content: string }> | null = null
+
+      // If user wants to attach the PDF, generate it and prepare either Storage upload or direct base64
+      if (attachPdf) {
+        onProgress?.('Gerando PDF consolidado com todos os comprovantes...')
+        try {
+          const { blob, filename } = await generateConsolidatedReportBlob(
+            trip,
+            expenses,
+            collaboratorName,
+            (curr, tot, msg) => {
+              onProgress?.(`${msg} (${Math.round((curr / tot) * 100)}%)`)
+            },
+          )
+
+          const pdfSizeBytes = blob.size
+          const pdfSizeMb = (pdfSizeBytes / (1024 * 1024)).toFixed(2)
+          console.info(`PDF consolidado gerado: ${filename} (${pdfSizeMb} MB)`)
+
+          // If PDF is larger than 35MB, fail gracefully with friendly message
+          if (pdfSizeBytes > 35 * 1024 * 1024) {
+            return {
+              success: false,
+              configured: true,
+              error: `O PDF consolidado tem ${pdfSizeMb} MB e excede o limite máximo permitido de 35 MB.`,
+              message:
+                'O relatório consolidado com todos os comprovantes rasterizados é muito grande para anexar no e-mail corporativo. Baixe o PDF diretamente pelo app e encaminhe pelo seu cliente de e-mail.',
+              errorAction:
+                'Utilize o botão "Baixar em PDF Consolidado" no modal de prévia e compartilhe via Drive ou cliente de e-mail local.',
+              mailToFallback: { to, subject, body },
+            }
+          }
+
+          // Try uploading to Storage bucket 'comprovantes' under temporary prefix 'relatorios_temp/'
+          // If upload fails (e.g. permission), fall back to direct base64 in body
+          let storageUploaded = false
+          try {
+            onProgress?.('Fazendo upload do anexo para o servidor de envio...')
+            const tempStoragePath = `relatorios_temp/${Date.now()}_${filename}`
+            const { error: uploadError } = await supabase.storage
+              .from('comprovantes')
+              .upload(tempStoragePath, blob, {
+                contentType: 'application/pdf',
+                upsert: true,
+              })
+
+            if (!uploadError) {
+              storageUploaded = true
+              storageAttachmentPayload = {
+                bucket: 'comprovantes',
+                path: tempStoragePath,
+                filename,
+                cleanupAfterSend: true,
+              }
+            } else {
+              console.warn('Storage upload falhou, tentando fallback base64 direto:', uploadError)
+            }
+          } catch (uploadExc) {
+            console.warn('Exceção no upload para Storage, tentando fallback direto:', uploadExc)
+          }
+
+          // If not uploaded to storage, convert to base64 directly
+          if (!storageUploaded) {
+            onProgress?.('Codificando PDF para anexo direto...')
+            const base64Data = await blobToBase64(blob)
+            directAttachmentsPayload = [
+              {
+                filename,
+                content: base64Data,
+              },
+            ]
+          }
+        } catch (pdfGenErr: any) {
+          console.error('Falha ao compilar PDF para anexo:', pdfGenErr)
+          return {
+            success: false,
+            configured: true,
+            error: `Não foi possível gerar o PDF para anexo: ${pdfGenErr?.message || 'erro interno'}`,
+            message:
+              'Houve uma falha ao compilar o PDF consolidado dos comprovantes. Você pode enviar apenas o resumo ou baixar os comprovantes avulsos.',
+            mailToFallback: { to, subject, body },
+          }
+        }
+      }
+
+      onProgress?.('Despachando mensagem e anexos através da API de e-mail...')
+
+      const payload: Record<string, unknown> = {
         to,
         subject,
         body,
@@ -164,19 +303,23 @@ class ReportEmailService {
         },
       }
 
+      if (storageAttachmentPayload) {
+        payload.storageAttachment = storageAttachmentPayload
+      }
+      if (directAttachmentsPayload) {
+        payload.attachments = directAttachmentsPayload
+      }
+
       const { data, error } = await supabase.functions.invoke('send-report-email', {
         body: payload,
       })
 
-      // Even if supabase.functions.invoke returns an error (HTTP status != 2xx),
-      // error.context may contain response data or error details.
       if (error) {
         console.error('Erro retornado pela chamada send-report-email:', error)
         let serverErrorText = error.message || 'Falha ao comunicar com o servidor de e-mail.'
         let errorDetails: any = null
         let isConfigured = false
 
-        // Tenta extrair resposta JSON que a Edge Function possa ter anexado
         try {
           if ((error as any).context && typeof (error as any).context.json === 'function') {
             const parsed = await (error as any).context.json()
@@ -213,10 +356,11 @@ class ReportEmailService {
           success: true,
           configured: true,
           messageId: data.messageId,
+          attachedFiles: data.attachedFiles,
         }
       }
 
-      // Backend returned 200 with success: false (Resend error, unconfigured, etc.)
+      // Backend returned 200 with success: false
       const rawMsg = data?.error || data?.message || 'Falha no serviço de e-mail'
       const formatted = formatResendError(rawMsg, data?.statusCode)
 

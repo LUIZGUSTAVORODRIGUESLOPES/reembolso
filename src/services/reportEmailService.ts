@@ -154,6 +154,11 @@ class ReportEmailService {
    */
   async checkConfig(): Promise<EmailProviderConfigStatus> {
     try {
+      const { data: sessionData } = await supabase.auth.getSession()
+      if (!sessionData?.session) {
+        return { configured: false, provider: null }
+      }
+
       const { data, error } = await supabase.functions.invoke('send-report-email', {
         body: { checkConfigOnly: true },
       })
@@ -190,6 +195,32 @@ class ReportEmailService {
     } = params
 
     try {
+      // Validar sessão ativa antes de iniciar o processo de envio
+      const { data: sessionData } = await supabase.auth.getSession()
+      const currentSession = sessionData?.session
+      if (!currentSession || !currentSession.user) {
+        return {
+          success: false,
+          configured: false,
+          error: 'Sessão expirada ou não autenticada. Por favor, faça login novamente.',
+          message: 'Você precisa estar autenticado para enviar a prestação de contas por e-mail.',
+          errorAction: 'Faça login no sistema e tente novamente.',
+          mailToFallback: { to, subject, body },
+        }
+      }
+
+      const currentUserId = currentSession.user.id
+
+      if (!trip?.id) {
+        return {
+          success: false,
+          configured: false,
+          error: 'Identificador da viagem inválido.',
+          message: 'Não foi possível identificar a viagem para envio do relatório.',
+          mailToFallback: { to, subject, body },
+        }
+      }
+
       let storageAttachmentPayload: {
         bucket: string
         path: string
@@ -230,12 +261,13 @@ class ReportEmailService {
             }
           }
 
-          // Try uploading to Storage bucket 'comprovantes' under temporary prefix 'relatorios_temp/'
+          // Try uploading to Storage bucket 'comprovantes' under temporary prefix 'relatorios_temp/<userId>/'
           // If upload fails (e.g. permission), fall back to direct base64 in body
           let storageUploaded = false
           try {
             onProgress?.('Fazendo upload do anexo para o servidor de envio...')
-            const tempStoragePath = `relatorios_temp/${Date.now()}_${filename}`
+            const safePdfFilename = filename.replace(/[^\w\s.\-_]/gi, '_').replace(/\.\.+/g, '')
+            const tempStoragePath = `relatorios_temp/${currentUserId}/${Date.now()}_${safePdfFilename}`
             const { error: uploadError } = await supabase.storage
               .from('comprovantes')
               .upload(tempStoragePath, blob, {

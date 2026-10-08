@@ -14,16 +14,16 @@ interface SendEmailPayload {
   body: string
   tripDetails?: {
     id: string
-    destination: string
-    startDate: string
-    endDate: string
-    totalAmount: number
+    destination?: string
+    startDate?: string
+    endDate?: string
+    totalAmount?: number
     motivo?: string
     collaboratorName?: string
   }
   expensesSummary?: {
-    totalItems: number
-    totalAmount: number
+    totalItems?: number
+    totalAmount?: number
   }
   pdfHtml?: string
   checkConfigOnly?: boolean
@@ -36,7 +36,7 @@ interface SendEmailPayload {
   storageAttachment?: {
     bucket: string
     path: string
-    filename: string
+    filename?: string
     cleanupAfterSend?: boolean
   }
 }
@@ -44,6 +44,49 @@ interface SendEmailPayload {
 // Resend allows up to 40MB total payload after base64.
 // We set a conservative safe limit of 35MB for attachments to prevent network timeouts.
 const MAX_ATTACHMENT_SIZE_BYTES = 35 * 1024 * 1024
+const MAX_RECIPIENTS = 5
+const MAX_SUBJECT_LENGTH = 200
+const MAX_BODY_LENGTH = 20000
+const MAX_DIRECT_ATTACHMENTS = 5
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+function escapeHtml(str: unknown): string {
+  if (str === null || str === undefined) return ''
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;')
+}
+
+function sanitizeFilename(name: unknown): string {
+  if (!name || typeof name !== 'string') {
+    return 'anexo.bin'
+  }
+  // Strip null bytes, paths, and control characters
+  const cleaned =
+    name
+      .replace(/[\0\r\n]/g, '')
+      .replace(/\\/g, '/')
+      .split('/')
+      .pop() || 'anexo.bin'
+
+  const safe = cleaned
+    .replace(/\.\.+/g, '')
+    .replace(/[^\w\s.\-_]/gi, '_')
+    .trim()
+  return safe.length > 0 ? safe.slice(0, 100) : 'anexo.bin'
+}
+
+function jsonResponse(data: Record<string, unknown>, status: number): Response {
+  return new Response(JSON.stringify(data), {
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    status,
+  })
+}
 
 Deno.serve(async (req: Request) => {
   // Handle preflight CORS
@@ -55,23 +98,61 @@ Deno.serve(async (req: Request) => {
     const resendApiKey = Deno.env.get('RESEND_API_KEY') || ''
     const emailSender = Deno.env.get('EMAIL_FROM') || 'Reembolso.ai <onboarding@resend.dev>'
     const supabaseUrl = Deno.env.get('SUPABASE_URL') || ''
-    const supabaseServiceKey =
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_ANON_KEY') || ''
+    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') || ''
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || ''
+
+    // ITEM 2 — Autenticação obrigatória em TODA requisição (inclusive checkConfigOnly)
+    const authHeader = req.headers.get('Authorization') || req.headers.get('authorization')
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return jsonResponse(
+        { error: 'Não autorizado. Token de autenticação ausente ou inválido.' },
+        401,
+      )
+    }
+
+    const token = authHeader.replace(/^Bearer\s+/i, '').trim()
+    if (!token) {
+      return jsonResponse(
+        { error: 'Não autorizado. Token de autenticação ausente ou inválido.' },
+        401,
+      )
+    }
+
+    // Criar cliente Supabase autenticado com o JWT do usuário e ANON_KEY (RLS ativo)
+    const userSupabase = createClient(supabaseUrl, supabaseAnonKey, {
+      global: {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    })
+
+    const { data: userData, error: userError } = await userSupabase.auth.getUser(token)
+    if (userError || !userData?.user) {
+      return jsonResponse(
+        { error: 'Não autorizado. Token de autenticação inválido ou expirado.' },
+        401,
+      )
+    }
+
+    const authenticatedUser = userData.user
+    const userId = authenticatedUser.id
 
     const body: SendEmailPayload = await req.json().catch(() => ({}) as SendEmailPayload)
 
-    // Quick status check query from client to see if provider is configured
+    // Quick status check query from authenticated client
     if (body.checkConfigOnly) {
-      return new Response(
-        JSON.stringify({
+      return jsonResponse(
+        {
           configured: Boolean(resendApiKey),
           provider: resendApiKey ? 'Resend' : null,
           sender: emailSender,
-        }),
-        {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          status: 200,
         },
+        200,
       )
     }
 
@@ -85,24 +166,126 @@ Deno.serve(async (req: Request) => {
       storageAttachment,
     } = body
 
+    // ITEM 3 — Validação de payload
     if (!to || !subject) {
-      return new Response(
-        JSON.stringify({
-          error: 'Destinatário (to) e assunto (subject) são obrigatórios.',
-        }),
-        {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          status: 400,
-        },
+      return jsonResponse({ error: 'Destinatário (to) e assunto (subject) são obrigatórios.' }, 400)
+    }
+
+    const recipientList = (Array.isArray(to) ? to : [to])
+      .map((e) => (typeof e === 'string' ? e.trim() : ''))
+      .filter(Boolean)
+
+    if (recipientList.length === 0) {
+      return jsonResponse(
+        { error: 'Pelo menos um endereço de e-mail de destinatário é obrigatório.' },
+        400,
       )
     }
 
-    const recipientList = Array.isArray(to) ? to : [to]
+    if (recipientList.length > MAX_RECIPIENTS) {
+      return jsonResponse(
+        { error: `O número máximo de destinatários permitidos é ${MAX_RECIPIENTS}.` },
+        400,
+      )
+    }
 
-    // If Resend API key is NOT configured, return clear diagnostic info
+    for (const email of recipientList) {
+      if (!EMAIL_REGEX.test(email) || email.length > 254) {
+        return jsonResponse(
+          { error: `O endereço de e-mail informado é inválido: "${escapeHtml(email)}".` },
+          400,
+        )
+      }
+    }
+
+    if (typeof subject !== 'string' || subject.trim().length === 0) {
+      return jsonResponse({ error: 'Assunto do e-mail é obrigatório.' }, 400)
+    }
+
+    if (subject.length > MAX_SUBJECT_LENGTH) {
+      return jsonResponse(
+        { error: `O assunto do e-mail não pode exceder ${MAX_SUBJECT_LENGTH} caracteres.` },
+        400,
+      )
+    }
+
+    if (typeof messageBody !== 'string') {
+      return jsonResponse({ error: 'Corpo da mensagem é obrigatório.' }, 400)
+    }
+
+    if (messageBody.length > MAX_BODY_LENGTH) {
+      return jsonResponse(
+        { error: `O corpo do e-mail não pode exceder ${MAX_BODY_LENGTH} caracteres.` },
+        400,
+      )
+    }
+
+    // ITEM 2 — Autorização sobre os dados (tripDetails.id)
+    const tripId = tripDetails?.id
+    if (!tripId || typeof tripId !== 'string' || !UUID_REGEX.test(tripId)) {
+      return jsonResponse({ error: 'Identificador da viagem inválido ou ausente no payload.' }, 400)
+    }
+
+    // Consulta com cliente autenticado do usuário (RLS ativo em public.trips)
+    const { data: tripRow, error: tripQueryError } = await userSupabase
+      .from('trips')
+      .select('id, user_id')
+      .eq('id', tripId)
+      .maybeSingle()
+
+    if (tripQueryError || !tripRow) {
+      console.warn(
+        `Acesso negado ou viagem não encontrada para tripId=${tripId}, userId=${userId}:`,
+        tripQueryError,
+      )
+      return jsonResponse(
+        { error: 'Você não tem permissão para enviar esta prestação de contas.' },
+        403,
+      )
+    }
+
+    // ITEM 2 — Restringir o storageAttachment
+    let storageFileToDelete: { bucket: string; path: string } | null = null
+
+    if (storageAttachment) {
+      if (storageAttachment.bucket !== 'comprovantes') {
+        return jsonResponse(
+          { error: 'Bucket de anexo inválido. Somente comprovantes é permitido.' },
+          400,
+        )
+      }
+
+      const expectedPrefix = `relatorios_temp/${userId}/`
+      const normalizedPath = String(storageAttachment.path || '').replace(/\\/g, '/')
+      if (
+        !normalizedPath.startsWith(expectedPrefix) ||
+        normalizedPath.includes('..') ||
+        normalizedPath.includes('\0')
+      ) {
+        return jsonResponse(
+          { error: 'Caminho de anexo em storage inválido ou não autorizado.' },
+          400,
+        )
+      }
+    }
+
+    // Direct attachments validation
+    if (directAttachments) {
+      if (!Array.isArray(directAttachments)) {
+        return jsonResponse({ error: 'Formato inválido para lista de anexos diretos.' }, 400)
+      }
+      if (directAttachments.length > MAX_DIRECT_ATTACHMENTS) {
+        return jsonResponse(
+          { error: `O número máximo de anexos diretos permitidos é ${MAX_DIRECT_ATTACHMENTS}.` },
+          400,
+        )
+      }
+    }
+
+    // If Resend API key is NOT configured, return fallback info
     if (!resendApiKey) {
-      return new Response(
-        JSON.stringify({
+      return jsonResponse(
+        {
           success: false,
           configured: false,
           error: 'Provedor de e-mail não configurado',
@@ -113,11 +296,8 @@ Deno.serve(async (req: Request) => {
             subject,
             body: messageBody,
           },
-        }),
-        {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          status: 200,
         },
+        200,
       )
     }
 
@@ -129,8 +309,7 @@ Deno.serve(async (req: Request) => {
     if (Array.isArray(directAttachments) && directAttachments.length > 0) {
       for (const att of directAttachments) {
         if (att && att.content && att.filename) {
-          // Normalize base64 content in case it has data URI prefix
-          let cleanBase64 = att.content
+          let cleanBase64 = String(att.content)
           if (cleanBase64.includes('base64,')) {
             cleanBase64 = cleanBase64.split('base64,')[1]
           }
@@ -140,20 +319,21 @@ Deno.serve(async (req: Request) => {
           totalAttachmentBytes += estimatedBytes
 
           resendAttachments.push({
-            filename: att.filename,
+            filename: sanitizeFilename(att.filename),
             content: cleanBase64,
           })
         }
       }
     }
 
-    // 2. Process storage attachment if provided (e.g. PDF uploaded to comprovantes/relatorios_temp/...)
-    let storageFileToDelete: { bucket: string; path: string } | null = null
+    // 2. Process storage attachment if provided (validated bucket + userId prefix)
+    if (storageAttachment && storageAttachment.path) {
+      const downloadClient = supabaseServiceKey
+        ? createClient(supabaseUrl, supabaseServiceKey)
+        : userSupabase
 
-    if (storageAttachment?.path && storageAttachment?.bucket && supabaseUrl && supabaseServiceKey) {
       try {
-        const supabase = createClient(supabaseUrl, supabaseServiceKey)
-        const { data: fileData, error: downloadError } = await supabase.storage
+        const { data: fileData, error: downloadError } = await downloadClient.storage
           .from(storageAttachment.bucket)
           .download(storageAttachment.path)
 
@@ -175,7 +355,9 @@ Deno.serve(async (req: Request) => {
           const base64Content = btoa(binary)
 
           resendAttachments.push({
-            filename: storageAttachment.filename || 'relatorio_prestacao_contas.pdf',
+            filename: sanitizeFilename(
+              storageAttachment.filename || 'relatorio_prestacao_contas.pdf',
+            ),
             content: base64Content,
           })
 
@@ -194,22 +376,30 @@ Deno.serve(async (req: Request) => {
     // Check size limit
     if (totalAttachmentBytes > MAX_ATTACHMENT_SIZE_BYTES) {
       const sizeMb = (totalAttachmentBytes / (1024 * 1024)).toFixed(1)
-      return new Response(
-        JSON.stringify({
+      return jsonResponse(
+        {
           success: false,
           configured: true,
           error: `O tamanho total dos anexos (${sizeMb} MB) excede o limite máximo permitido para envio por e-mail (35 MB).`,
           message:
             'O PDF consolidado com comprovantes rasterizados é muito grande para os limites de anexo de e-mail corporativo. Por favor, baixe o PDF consolidado pelo app e encaminhe diretamente via cliente de e-mail ou compartilhe o link.',
-        }),
-        {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          status: 200,
         },
+        200,
       )
     }
 
-    // Format rich HTML email matching the design
+    // ITEM 3 — Escape HTML de todos os campos interpolados
+    const safeDestination = escapeHtml(tripDetails?.destination)
+    const safeStartDate = escapeHtml(tripDetails?.startDate)
+    const safeEndDate = escapeHtml(tripDetails?.endDate)
+    const safeCollaborator = escapeHtml(tripDetails?.collaboratorName)
+    const safeMotivo = escapeHtml(tripDetails?.motivo)
+    const safeMessageBody = escapeHtml(messageBody)
+    const safeTotalItems =
+      expensesSummary?.totalItems !== undefined ? Number(expensesSummary.totalItems) : null
+    const safeTotalAmount =
+      tripDetails?.totalAmount !== undefined ? Number(tripDetails.totalAmount).toFixed(2) : null
+
     const formattedHtml = `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b; max-width: 620px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
         <div style="border-bottom: 2px solid #1e40af; padding-bottom: 16px; margin-bottom: 20px;">
@@ -221,50 +411,46 @@ Deno.serve(async (req: Request) => {
           <h3 style="margin: 0 0 10px 0; color: #0f172a; font-size: 15px;">Resumo da Solicitação</h3>
           <table style="width: 100%; font-size: 13px; line-height: 1.6; border-collapse: collapse;">
             ${
-              tripDetails?.destination
-                ? `<tr><td style="color: #64748b; width: 140px;">Destino:</td><td><strong>${tripDetails.destination}</strong></td></tr>`
+              safeDestination
+                ? `<tr><td style="color: #64748b; width: 140px;">Destino:</td><td><strong>${safeDestination}</strong></td></tr>`
                 : ''
             }
             ${
-              tripDetails?.startDate
-                ? `<tr><td style="color: #64748b;">Período:</td><td>${tripDetails.startDate} a ${tripDetails.endDate}</td></tr>`
+              safeStartDate
+                ? `<tr><td style="color: #64748b;">Período:</td><td>${safeStartDate}${safeEndDate ? ` a ${safeEndDate}` : ''}</td></tr>`
                 : ''
             }
             ${
-              tripDetails?.collaboratorName
-                ? `<tr><td style="color: #64748b;">Solicitante:</td><td>${tripDetails.collaboratorName}</td></tr>`
+              safeCollaborator
+                ? `<tr><td style="color: #64748b;">Solicitante:</td><td>${safeCollaborator}</td></tr>`
                 : ''
             }
             ${
-              tripDetails?.motivo
-                ? `<tr><td style="color: #64748b;">Motivo:</td><td>${tripDetails.motivo}</td></tr>`
+              safeMotivo
+                ? `<tr><td style="color: #64748b;">Motivo:</td><td>${safeMotivo}</td></tr>`
                 : ''
             }
             ${
-              expensesSummary?.totalItems
-                ? `<tr><td style="color: #64748b;">Comprovantes:</td><td>${expensesSummary.totalItems} anexos auditados</td></tr>`
+              safeTotalItems !== null
+                ? `<tr><td style="color: #64748b;">Comprovantes:</td><td>${safeTotalItems} anexos auditados</td></tr>`
                 : ''
             }
             ${
-              tripDetails?.totalAmount !== undefined
-                ? `<tr><td style="color: #64748b;">Valor Total:</td><td style="color: #10b981; font-weight: bold; font-size: 15px;">R$ ${Number(
-                    tripDetails.totalAmount,
-                  ).toFixed(2)}</td></tr>`
+              safeTotalAmount !== null
+                ? `<tr><td style="color: #64748b;">Valor Total:</td><td style="color: #10b981; font-weight: bold; font-size: 15px;">R$ ${safeTotalAmount}</td></tr>`
                 : ''
             }
             ${
               resendAttachments.length > 0
                 ? `<tr><td style="color: #64748b;">Anexos:</td><td style="color: #1e40af; font-weight: 600;">📎 ${resendAttachments
-                    .map((a) => a.filename)
+                    .map((a) => escapeHtml(a.filename))
                     .join(', ')}</td></tr>`
                 : ''
             }
           </table>
         </div>
 
-        <div style="font-size: 13px; line-height: 1.6; color: #334155; margin-bottom: 24px; white-space: pre-wrap; background: #fafafa; padding: 14px; border-radius: 6px;">
-${messageBody}
-        </div>
+        <div style="font-size: 13px; line-height: 1.6; color: #334155; margin-bottom: 24px; white-space: pre-wrap; background: #fafafa; padding: 14px; border-radius: 6px;">${safeMessageBody}</div>
 
         ${
           resendAttachments.length > 0
@@ -303,62 +489,81 @@ ${messageBody}
       body: JSON.stringify(resendPayload),
     })
 
-    const resendData = await resendResponse.json()
+    const resendData = await resendResponse.json().catch(() => ({}))
 
     // Clean up temporary storage file if requested, regardless of send outcome
-    if (storageFileToDelete && supabaseUrl && supabaseServiceKey) {
+    if (storageFileToDelete && supabaseUrl) {
       try {
-        const supabase = createClient(supabaseUrl, supabaseServiceKey)
-        await supabase.storage.from(storageFileToDelete.bucket).remove([storageFileToDelete.path])
+        const cleanupClient = supabaseServiceKey
+          ? createClient(supabaseUrl, supabaseServiceKey)
+          : userSupabase
+        await cleanupClient.storage
+          .from(storageFileToDelete.bucket)
+          .remove([storageFileToDelete.path])
       } catch (cleanupErr) {
         console.warn('Falha na limpeza do arquivo temporário do Storage:', cleanupErr)
       }
     }
 
+    // ITEM 3 — Respostas de erro genéricas: NUNCA retornar details: resendData nem corpo bruto
     if (!resendResponse.ok) {
-      console.error('Erro retornado pela API Resend:', resendResponse.status, resendData)
-      return new Response(
-        JSON.stringify({
+      console.error(
+        'Erro retornado pela API Resend [HTTP ' + resendResponse.status + ']:',
+        resendData,
+      )
+
+      let friendlyError = 'Falha no serviço de e-mail ao processar o envio.'
+      let friendlyMessage = 'Ocorreu um erro durante a comunicação com o provedor de e-mail.'
+
+      if (resendResponse.status === 401) {
+        friendlyError = 'A chave RESEND_API_KEY configurada é inválida ou expirou.'
+        friendlyMessage = 'Atualize a chave RESEND_API_KEY no painel de segredos do Supabase.'
+      } else if (resendResponse.status === 403) {
+        friendlyError =
+          'Domínio do remetente não verificado no Resend ou restrito à conta de teste.'
+        friendlyMessage =
+          'Verifique o domínio no Resend ou envie apenas para o e-mail da conta de teste.'
+      } else if (resendResponse.status === 422) {
+        friendlyError = 'Os parâmetros de envio de e-mail foram recusados pelo provedor.'
+        friendlyMessage = 'Verifique se os endereços de destinatário e remetente são válidos.'
+      } else if (resendResponse.status === 429) {
+        friendlyError = 'Limite de envios por segundo excedido no Resend.'
+        friendlyMessage = 'Aguarde alguns instantes e tente novamente.'
+      }
+
+      return jsonResponse(
+        {
           success: false,
           configured: true,
           statusCode: resendResponse.status,
-          error:
-            resendData?.message || `Falha no serviço de e-mail (código ${resendResponse.status})`,
-          name: resendData?.name,
-          details: resendData,
-        }),
-        {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          status: 200,
+          error: friendlyError,
+          message: friendlyMessage,
         },
+        200,
       )
     }
 
-    return new Response(
-      JSON.stringify({
+    return jsonResponse(
+      {
         success: true,
         configured: true,
         messageId: resendData?.id,
         recipient: recipientList,
         attachedFiles: resendAttachments.map((a) => a.filename),
-      }),
-      {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200,
       },
+      200,
     )
   } catch (err: any) {
+    // ITEM 3 — Resposta genérica em exceções sem vazar detalhes crus
     console.error('Erro na Edge Function send-report-email:', err)
-    return new Response(
-      JSON.stringify({
+    return jsonResponse(
+      {
         success: false,
         configured: Boolean(Deno.env.get('RESEND_API_KEY')),
-        error: err?.message || 'Erro inesperado no servidor de envio',
-      }),
-      {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200,
+        error: 'Erro inesperado no servidor de envio',
+        message: 'Ocorreu uma falha inesperada durante o processamento do envio.',
       },
+      500,
     )
   }
 })

@@ -422,13 +422,15 @@ class SupabaseStorageService {
   }
 
   public async recalculateTripTotal(tripId: string): Promise<number> {
+    // O banco já recalcula automaticamente via trigger após INSERT/UPDATE/DELETE.
+    // Lemos o valor atualizado persistido no banco para garantir sincronia.
+    const trip = await this.getTrip(tripId)
+    if (trip) {
+      return trip.total_amount
+    }
     const expenses = await this.listExpenses(tripId)
     const sum = expenses.reduce((acc, curr) => acc + (curr.amount || 0), 0)
-    const rounded = Number(sum.toFixed(2))
-
-    await this.client.from('trips').update({ total_amount: rounded }).eq('id', tripId)
-
-    return rounded
+    return Number(sum.toFixed(2))
   }
 
   // Expenses CRUD

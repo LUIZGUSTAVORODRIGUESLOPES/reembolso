@@ -20,6 +20,15 @@ export function formatDateBR(dateString: string): string {
   }
 }
 
+export function normalizeSearchText(text: string | null | undefined): string {
+  if (!text) return ''
+  return text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+}
+
 export function formatDateRangeBR(start: string, end: string): string {
   if (!start) return '-'
   if (!end || start === end) return formatDateBR(start)

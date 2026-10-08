@@ -32,6 +32,36 @@ export default function Layout() {
   const [activeAlertsCount, setActiveAlertsCount] = useState<number>(0)
   const [searchQuery, setSearchQuery] = useState('')
 
+  // Sync searchQuery with URL query parameter 'q' when on / or /trips
+  const searchParams = new URLSearchParams(location.search)
+  const urlQuery = searchParams.get('q') || ''
+
+  useEffect(() => {
+    if (urlQuery !== searchQuery) {
+      setSearchQuery(urlQuery)
+    }
+  }, [urlQuery])
+
+  const handleGlobalSearchChange = (newVal: string) => {
+    setSearchQuery(newVal)
+    const currentParams = new URLSearchParams(location.search)
+    if (newVal.trim()) {
+      currentParams.set('q', newVal)
+    } else {
+      currentParams.delete('q')
+    }
+
+    const newSearch = currentParams.toString() ? `?${currentParams.toString()}` : ''
+
+    // If already on / or /trips, replace URL state smoothly
+    if (location.pathname === '/' || location.pathname === '/trips') {
+      navigate(`${location.pathname}${newSearch}`, { replace: true })
+    } else if (newVal.trim()) {
+      // If user starts searching from any other screen, redirect to /trips with the query
+      navigate(`/trips${newSearch}`)
+    }
+  }
+
   const navItems = [
     { path: '/', label: 'Dashboard', icon: LayoutDashboard },
     { path: '/trips', label: 'Viagens', icon: PlaneTakeoff },
@@ -306,9 +336,18 @@ export default function Layout() {
                   type="text"
                   placeholder="Pesquisar viagem ou recibo..."
                   value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onChange={(e) => handleGlobalSearchChange(e.target.value)}
                   className="pl-9 h-9 text-xs bg-slate-50 border-slate-200 focus:bg-white"
                 />
+                {searchQuery && (
+                  <button
+                    onClick={() => handleGlobalSearchChange('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
+                    title="Limpar pesquisa"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
 
               {/* Notification Bell */}
@@ -359,7 +398,7 @@ export default function Layout() {
               <span>— Sistema Inteligente de Prestação de Contas Corporativas</span>
             </div>
             <div className="flex items-center gap-4 text-slate-400 text-[11px]">
-              <span>Motor de OCR & Auditoria v2.4</span>
+              <span>Motor de OCR & Auditoria v2.5</span>
               <span>•</span>
               <span>Regras de Compliance Ativas</span>
             </div>

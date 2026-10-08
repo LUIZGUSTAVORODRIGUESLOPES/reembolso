@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   TrendingUp,
   Briefcase,
@@ -19,6 +19,10 @@ import {
   ShieldAlert,
   Trash2,
   Lock,
+  Search,
+  X,
+  Receipt,
+  FileCheck2,
 } from 'lucide-react'
 import { storageService } from '@/services/storageService'
 import { Trip, TripStatus } from '@/types/database'
@@ -27,10 +31,12 @@ import {
   formatDateRangeBR,
   TRIP_STATUS_CONFIG,
   TRANSPORT_LABELS,
+  normalizeSearchText,
 } from '@/lib/formatters'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
 import {
   Select,
   SelectContent,
@@ -39,6 +45,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { CreateTripModal } from '@/components/CreateTripModal'
+import { ReceiptSearchCard } from '@/components/ReceiptSearchCard'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -56,6 +63,7 @@ export default function Index() {
   const { toast } = useToast()
   const navigate = useNavigate()
   const { user, loading: authLoading } = useAuth()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [trips, setTrips] = useState<Trip[]>([])
   const [loading, setLoading] = useState(true)
   const [metrics, setMetrics] = useState({
@@ -64,6 +72,29 @@ export default function Index() {
     activeAlertsCount: 0,
     totalReimbursedThisMonth: 0,
   })
+
+  // Instant Trip Search query (synced with URL ?q=)
+  const [searchQuery, setSearchQuery] = useState(searchParams.get('q') || '')
+  const [showReceiptModule, setShowReceiptModule] = useState(false)
+
+  // Sync internal state if URL parameter changes
+  useEffect(() => {
+    const q = searchParams.get('q') || ''
+    if (q !== searchQuery) {
+      setSearchQuery(q)
+    }
+  }, [searchParams])
+
+  const handleSearchChange = (newVal: string) => {
+    setSearchQuery(newVal)
+    const newParams = new URLSearchParams(searchParams)
+    if (newVal.trim()) {
+      newParams.set('q', newVal)
+    } else {
+      newParams.delete('q')
+    }
+    setSearchParams(newParams, { replace: true })
+  }
 
   const [periodFilter, setPeriodFilter] = useState<string>('todos')
   const [statusFilter, setStatusFilter] = useState<string>('todos')
@@ -138,8 +169,10 @@ export default function Index() {
     return Array.from(map.entries()).map(([key, label]) => ({ key, label }))
   }, [trips])
 
-  // Filter trips
+  // Filter trips instantaneamente por Destino, Motivo ou Observações, preservando filtros de período e status
   const filteredTrips = useMemo(() => {
+    const normalizedQuery = normalizeSearchText(searchQuery)
+
     return trips.filter((t) => {
       // Period filter: starts with year-month
       if (periodFilter !== 'todos') {
@@ -149,9 +182,24 @@ export default function Index() {
       if (statusFilter !== 'todos') {
         if (t.status !== statusFilter) return false
       }
+
+      // Text search: Destino, Motivo ou Observações (notes)
+      if (normalizedQuery) {
+        const destination = normalizeSearchText(t.destination)
+        const motivo = normalizeSearchText(t.motivo)
+        const notes = normalizeSearchText(t.notes)
+
+        const matches =
+          destination.includes(normalizedQuery) ||
+          motivo.includes(normalizedQuery) ||
+          notes.includes(normalizedQuery)
+
+        if (!matches) return false
+      }
+
       return true
     })
-  }, [trips, periodFilter, statusFilter])
+  }, [trips, periodFilter, statusFilter, searchQuery])
 
   const confirmDeleteTrip = async () => {
     if (!tripToDelete) return
@@ -204,6 +252,23 @@ export default function Index() {
         {/* Action Buttons */}
         <div className="flex items-center gap-2.5 flex-wrap">
           <Button
+            variant={showReceiptModule ? 'default' : 'outline'}
+            onClick={() => setShowReceiptModule((prev) => !prev)}
+            className={`font-medium text-xs sm:text-sm gap-1.5 transition-colors ${
+              showReceiptModule
+                ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm'
+                : 'text-blue-700 border-blue-300 hover:bg-blue-50'
+            }`}
+          >
+            <Receipt className="w-4 h-4" />
+            <span>
+              {showReceiptModule
+                ? 'Ocultar Verificador de Recibos'
+                : 'Verificar Recibo / Anti-Duplicidade'}
+            </span>
+          </Button>
+
+          <Button
             variant="outline"
             onClick={() => setModalOpen(true)}
             className="text-slate-700 hover:text-slate-900 border-slate-300 font-medium text-xs sm:text-sm gap-1.5"
@@ -221,6 +286,13 @@ export default function Index() {
           </Button>
         </div>
       </div>
+
+      {/* Módulo de Busca & Verificação Anti-Duplicidade de Recibos */}
+      {showReceiptModule && (
+        <div className="transition-all animate-in fade-in-50 duration-200">
+          <ReceiptSearchCard onClose={() => setShowReceiptModule(false)} />
+        </div>
+      )}
 
       {/* Metrics Row (4 Cards) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -307,15 +379,41 @@ export default function Index() {
             <span className="text-xs bg-slate-100 text-slate-600 font-semibold px-2 py-0.5 rounded-full">
               {filteredTrips.length} {filteredTrips.length === 1 ? 'viagem' : 'viagens'}
             </span>
+            {searchQuery && (
+              <span className="text-[11px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-md font-medium border border-blue-200">
+                Filtrado por: "{searchQuery}"
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-3 flex-wrap">
+            {/* Campo de Busca Rápida de Viagens */}
+            <div className="relative w-full sm:w-64">
+              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <Input
+                type="text"
+                placeholder="Buscar destino, motivo ou notas..."
+                value={searchQuery}
+                onChange={(e) => handleSearchChange(e.target.value)}
+                className="pl-8 pr-7 h-8 text-xs bg-slate-50 border-slate-200 focus:bg-white"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => handleSearchChange('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
+                  title="Limpar filtro"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+
             {/* Filter by Period */}
             <div className="flex items-center gap-1.5 text-xs text-slate-600">
               <Filter className="w-3.5 h-3.5 text-slate-400" />
               <span className="hidden sm:inline">Período:</span>
               <Select value={periodFilter} onValueChange={setPeriodFilter}>
-                <SelectTrigger className="w-[160px] h-8 text-xs bg-slate-50">
+                <SelectTrigger className="w-[150px] h-8 text-xs bg-slate-50">
                   <SelectValue placeholder="Todos os períodos" />
                 </SelectTrigger>
                 <SelectContent>
@@ -333,7 +431,7 @@ export default function Index() {
             <div className="flex items-center gap-1.5 text-xs text-slate-600">
               <span className="hidden sm:inline">Status:</span>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-[160px] h-8 text-xs bg-slate-50">
+                <SelectTrigger className="w-[150px] h-8 text-xs bg-slate-50">
                   <SelectValue placeholder="Todos os status" />
                 </SelectTrigger>
                 <SelectContent>
@@ -346,6 +444,20 @@ export default function Index() {
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Quick button to open receipt verification */}
+            {!showReceiptModule && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowReceiptModule(true)}
+                className="h-8 text-xs text-blue-700 border-blue-200 hover:bg-blue-50 gap-1"
+                title="Checar duplicidade de recibos"
+              >
+                <Receipt className="w-3.5 h-3.5 text-blue-600" />
+                <span className="hidden lg:inline">Checar Recibos</span>
+              </Button>
+            )}
           </div>
         </div>
 

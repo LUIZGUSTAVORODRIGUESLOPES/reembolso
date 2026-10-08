@@ -205,8 +205,40 @@ class SupabaseStorageService {
     return data ? this.mapTripRow(data) : null
   }
 
+  /**
+   * Verifica se a viagem está bloqueada por imutabilidade de governança
+   * (status 'auditada', 'fechada' ou 'reembolsada').
+   * Quando bloqueada, despesas não podem ser inseridas/alteradas/excluídas
+   * e dados principais da viagem não podem ser alterados.
+   */
+  public isTripLocked(status?: TripStatus | string | null): boolean {
+    if (!status) return false
+    return status === 'auditada' || status === 'fechada' || status === 'reembolsada'
+  }
+
+  /**
+   * Mantido por retrocompatibilidade: alias para isTripLocked.
+   */
   public isTripLockedForDeletion(status: TripStatus | string): boolean {
-    return status === 'fechada' || status === 'reembolsada'
+    return this.isTripLocked(status)
+  }
+
+  /**
+   * Converte mensagens técnicas de trigger do banco para mensagens amigáveis em pt-BR.
+   */
+  public formatDatabaseError(err: any): string {
+    const raw = err?.message || err?.details || String(err || '')
+    if (
+      raw.includes('Não é permitido') ||
+      raw.includes('imutável') ||
+      raw.includes('bloqueados para edição')
+    ) {
+      return raw
+    }
+    if (raw.includes('trg_protect_expense') || raw.includes('trg_protect_trip')) {
+      return 'Esta viagem está fechada/reembolsada e seus dados estão bloqueados para edição.'
+    }
+    return raw || 'Ocorreu um erro ao processar a operação no banco de dados.'
   }
 
   /**

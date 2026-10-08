@@ -167,8 +167,7 @@ export default function Index() {
     } catch (err: any) {
       toast({
         title: 'Exclusão não permitida',
-        description:
-          err?.message || 'Viagens com status fechada ou reembolsada não podem ser excluídas.',
+        description: storageService.formatDatabaseError(err),
         variant: 'destructive',
       })
     } finally {
@@ -459,10 +458,10 @@ export default function Index() {
 
                         <td className="py-3.5 px-4 text-right" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1.5">
-                            {storageService.isTripLockedForDeletion(trip.status) ? (
+                            {storageService.isTripLocked(trip.status) ? (
                               <div
                                 className="h-8 w-8 flex items-center justify-center text-slate-300 cursor-not-allowed"
-                                title="Viagem fechada — exclusão bloqueada"
+                                title="Viagem fechada/auditada/reembolsada — exclusão bloqueada por governança"
                               >
                                 <Lock className="w-3.5 h-3.5" />
                               </div>
@@ -543,12 +542,12 @@ export default function Index() {
                     </div>
 
                     <div className="flex items-center gap-2 pt-2">
-                      {storageService.isTripLockedForDeletion(trip.status) ? (
+                      {storageService.isTripLocked(trip.status) ? (
                         <div
                           className="flex items-center justify-center gap-1 text-[11px] text-slate-400 py-1.5 px-2 bg-slate-100 rounded border border-slate-200 cursor-not-allowed flex-1"
-                          title="Viagem fechada — exclusão bloqueada"
+                          title="Viagem fechada/auditada/reembolsada — exclusão bloqueada por governança"
                         >
-                          <Lock className="w-3 h-3" />
+                          <Lock className="w-3.5 h-3.5" />
                           <span>Exclusão bloqueada</span>
                         </div>
                       ) : (

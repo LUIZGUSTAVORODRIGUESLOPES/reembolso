@@ -244,10 +244,10 @@ export default function TriagePage() {
           }
         }
       }
-    } catch {
+    } catch (err: any) {
       toast({
         title: 'Erro ao salvar',
-        description: 'Não foi possível atualizar os dados do comprovante.',
+        description: storageService.formatDatabaseError(err),
         variant: 'destructive',
       })
     }
@@ -258,7 +258,7 @@ export default function TriagePage() {
   // Check if current assigned trip is locked
   const assignedTrip = trips.find((t) => t.id === assignedTripId)
   const isAssignedTripLocked = assignedTrip
-    ? storageService.isTripLockedForDeletion(assignedTrip.status)
+    ? storageService.isTripLocked(assignedTrip.status)
     : false
 
   const handleDeleteExpense = async () => {
@@ -282,9 +282,7 @@ export default function TriagePage() {
     } catch (err: any) {
       toast({
         title: 'Exclusão bloqueada',
-        description:
-          err?.message ||
-          'Não foi possível remover o comprovante. Viagens fechadas ou reembolsadas não permitem exclusões.',
+        description: storageService.formatDatabaseError(err),
         variant: 'destructive',
       })
     } finally {

@@ -214,20 +214,23 @@ export default function UploadPage() {
   }
 
   const findBestTripForDate = (dateStr: string | null, trips: Trip[]): string => {
+    // Filtrar apenas viagens abertas (em_triagem ou com_pendencias)
+    const openTrips = trips.filter((t) => !storageService.isTripLocked(t.status))
+
     if (!dateStr) {
-      const triage = trips.find((t) => t.status === 'em_triagem')
-      return triage ? triage.id : trips[0]?.id || 'new'
+      const triage = openTrips.find((t) => t.status === 'em_triagem')
+      return triage ? triage.id : openTrips[0]?.id || 'new'
     }
 
-    // If a trip range includes this date, use it
-    for (const trip of trips) {
+    // If a trip range includes this date, use it (se a viagem estiver aberta)
+    for (const trip of openTrips) {
       if (dateStr >= trip.start_date && dateStr <= trip.end_date) {
         return trip.id
       }
     }
-    const triage = trips.find((t) => t.status === 'em_triagem')
+    const triage = openTrips.find((t) => t.status === 'em_triagem')
     if (triage) return triage.id
-    if (trips.length > 0) return trips[0].id
+    if (openTrips.length > 0) return openTrips[0].id
     return 'new'
   }
 
@@ -375,11 +378,11 @@ export default function UploadPage() {
       setTimeout(() => {
         navigate('/triage')
       }, 700)
-    } catch (saveErr) {
+    } catch (saveErr: any) {
       console.error('Error saving expenses:', saveErr)
       toast({
         title: 'Erro ao salvar comprovantes',
-        description: 'Não foi possível gravar no banco de dados.',
+        description: storageService.formatDatabaseError(saveErr),
         variant: 'destructive',
       })
     }
@@ -772,11 +775,15 @@ export default function UploadPage() {
                                 <SelectValue placeholder="Vincular à viagem" />
                               </SelectTrigger>
                               <SelectContent>
-                                {existingTrips.map((tr) => (
-                                  <SelectItem key={tr.id} value={tr.id}>
-                                    {tr.destination} ({formatDateBR(tr.start_date)})
-                                  </SelectItem>
-                                ))}
+                                {existingTrips.map((tr) => {
+                                  const locked = storageService.isTripLocked(tr.status)
+                                  return (
+                                    <SelectItem key={tr.id} value={tr.id} disabled={locked}>
+                                      {tr.destination} ({formatDateBR(tr.start_date)})
+                                      {locked ? ' 🔒 (Bloqueada)' : ''}
+                                    </SelectItem>
+                                  )
+                                })}
                                 <SelectItem value="new">+ Criar Nova Viagem (IA)</SelectItem>
                               </SelectContent>
                             </Select>

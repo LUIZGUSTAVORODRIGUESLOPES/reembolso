@@ -163,6 +163,15 @@ export default function TripDetailPage() {
   const [expenseToDelete, setExpenseToDelete] = useState<Expense | null>(null)
   const [isDeletingExpense, setIsDeletingExpense] = useState(false)
 
+  // Edit Expense Modal (quando viagem aberta)
+  const [editingExpense, setEditingExpense] = useState<Expense | null>(null)
+  const [isUpdatingExpense, setIsUpdatingExpense] = useState(false)
+  const [editExpMerchant, setEditExpMerchant] = useState('')
+  const [editExpDate, setEditExpDate] = useState('')
+  const [editExpAmount, setEditExpAmount] = useState('')
+  const [editExpCategory, setEditExpCategory] = useState<ExpenseCategory>('alimentacao')
+  const [editExpCnpj, setEditExpCnpj] = useState('')
+
   const loadTripData = async () => {
     if (!id) return
     if (!user) {
@@ -211,11 +220,12 @@ export default function TripDetailPage() {
   const handleToggleManualAudit = async (exp: Expense, markConforme: boolean) => {
     if (!trip || !user) return
 
-    if (isTripLocked) {
+    const locked = storageService.isTripLocked(trip.status)
+    if (locked) {
       toast({
         title: 'Ação não permitida',
         description:
-          'Viagem fechada ou reembolsada não permite alteração de conferência de auditoria.',
+          'Esta viagem está fechada/reembolsada e seus dados estão bloqueados para edição.',
         variant: 'destructive',
       })
       return
@@ -275,10 +285,11 @@ export default function TripDetailPage() {
 
   const handleSaveJustification = async () => {
     if (!justifyingRule || !trip) return
-    if (isTripLocked) {
+    if (storageService.isTripLocked(trip.status)) {
       toast({
         title: 'Ação não permitida',
-        description: 'Viagem fechada ou reembolsada não permite alteração de auditoria.',
+        description:
+          'Esta viagem está fechada/reembolsada e seus dados estão bloqueados para edição.',
         variant: 'destructive',
       })
       return
@@ -320,10 +331,11 @@ export default function TripDetailPage() {
 
   const handleIgnoreRule = async (rule: AuditEvaluationRule) => {
     if (!trip) return
-    if (isTripLocked) {
+    if (storageService.isTripLocked(trip.status)) {
       toast({
         title: 'Ação não permitida',
-        description: 'Viagem fechada ou reembolsada não permite alteração de auditoria.',
+        description:
+          'Esta viagem está fechada/reembolsada e seus dados estão bloqueados para edição.',
         variant: 'destructive',
       })
       return
@@ -345,10 +357,11 @@ export default function TripDetailPage() {
     e.preventDefault()
     if (!trip) return
 
-    if (isTripLocked) {
+    if (storageService.isTripLocked(trip.status)) {
       toast({
-        title: 'Viagem fechada',
-        description: 'Não é permitido adicionar comprovantes a uma viagem fechada ou reembolsada.',
+        title: 'Viagem bloqueada',
+        description:
+          'Esta viagem está fechada/reembolsada e seus dados estão bloqueados para edição.',
         variant: 'destructive',
       })
       return
@@ -415,16 +428,84 @@ export default function TripDetailPage() {
       setSelectedReceiptFile(null)
       setFileError(null)
       loadTripData()
-    } catch (saveErr) {
+    } catch (saveErr: any) {
       console.error('Erro ao criar despesa:', saveErr)
       toast({
         title: 'Erro ao adicionar comprovante',
-        description:
-          'Ocorreu um erro ao gravar a despesa. Verifique sua conexão e tente novamente.',
+        description: storageService.formatDatabaseError(saveErr),
         variant: 'destructive',
       })
     } finally {
       setIsUploadingExpense(false)
+    }
+  }
+
+  const handleOpenEditExpense = (exp: Expense) => {
+    if (storageService.isTripLocked(trip?.status)) {
+      toast({
+        title: 'Edição bloqueada',
+        description:
+          'Esta viagem está fechada/reembolsada e seus dados estão bloqueados para edição.',
+        variant: 'destructive',
+      })
+      return
+    }
+    setEditingExpense(exp)
+    setEditExpMerchant(exp.merchant_name)
+    setEditExpDate(exp.issue_date)
+    setEditExpAmount(String(exp.amount))
+    setEditExpCategory(exp.category)
+    setEditExpCnpj(exp.cnpj || '')
+  }
+
+  const handleSaveExpenseEdits = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingExpense || !trip) return
+
+    if (storageService.isTripLocked(trip.status)) {
+      toast({
+        title: 'Edição bloqueada',
+        description:
+          'Esta viagem está fechada/reembolsada e seus dados estão bloqueados para edição.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    const parsed = parseFloat(editExpAmount.replace(',', '.'))
+    if (isNaN(parsed) || parsed <= 0) {
+      toast({
+        title: 'Valor inválido',
+        description: 'Informe um valor maior que zero.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    setIsUpdatingExpense(true)
+    try {
+      await storageService.updateExpense(editingExpense.id, {
+        merchant_name: editExpMerchant.trim(),
+        issue_date: editExpDate,
+        amount: parsed,
+        category: editExpCategory,
+        cnpj: editExpCnpj.trim() || null,
+      })
+      toast({
+        title: 'Despesa atualizada',
+        description: 'Os dados do comprovante foram salvos com sucesso.',
+      })
+      setEditingExpense(null)
+      loadTripData()
+    } catch (err: any) {
+      console.error('Erro ao atualizar despesa:', err)
+      toast({
+        title: 'Erro ao salvar despesa',
+        description: storageService.formatDatabaseError(err),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsUpdatingExpense(false)
     }
   }
 
@@ -442,9 +523,7 @@ export default function TripDetailPage() {
     } catch (err: any) {
       toast({
         title: 'Exclusão não permitida',
-        description:
-          err?.message ||
-          'Não foi possível excluir o comprovante. Verifique se a viagem não está fechada ou reembolsada.',
+        description: storageService.formatDatabaseError(err),
         variant: 'destructive',
       })
     } finally {
@@ -467,9 +546,7 @@ export default function TripDetailPage() {
     } catch (err: any) {
       toast({
         title: 'Exclusão não permitida',
-        description:
-          err?.message ||
-          'Não foi possível excluir a viagem. Viagens fechadas ou reembolsadas são imutáveis.',
+        description: storageService.formatDatabaseError(err),
         variant: 'destructive',
       })
     } finally {
@@ -479,21 +556,32 @@ export default function TripDetailPage() {
 
   const handleSaveTripEdits = async () => {
     if (!trip) return
+    const isLockedCurrently = storageService.isTripLocked(trip.status)
+
+    // Se já está travada, só permite alterar o status (se for para um novo status)
+    // Destination e motivo são mantidos inalterados
+    const payload: { destination?: string; motivo?: string; status: TripStatus } = {
+      status: editStatus,
+    }
+
+    if (!isLockedCurrently) {
+      payload.destination = editDestination.trim()
+      payload.motivo = editMotivo.trim()
+    }
+
     try {
-      await storageService.updateTrip(trip.id, {
-        destination: editDestination.trim(),
-        motivo: editMotivo.trim(),
-        status: editStatus,
-      })
+      await storageService.updateTrip(trip.id, payload)
       toast({
         title: 'Viagem atualizada',
         description: 'Os dados cadastrais foram salvos com sucesso.',
       })
       setEditTripOpen(false)
       loadTripData()
-    } catch {
+    } catch (err: any) {
+      console.error('Erro ao atualizar viagem:', err)
       toast({
         title: 'Erro ao atualizar viagem',
+        description: storageService.formatDatabaseError(err),
         variant: 'destructive',
       })
     }
@@ -514,7 +602,7 @@ export default function TripDetailPage() {
   ).length
   const auditPercent = totalRules > 0 ? Math.round((passedRules / totalRules) * 100) : 100
   const statusConf = TRIP_STATUS_CONFIG[trip.status]
-  const isTripLocked = storageService.isTripLockedForDeletion(trip.status)
+  const isTripLocked = storageService.isTripLocked(trip.status)
 
   // Manual Audit Progress (conferência humana de cada lançamento)
   const totalExpenses = expenses.length
@@ -526,6 +614,44 @@ export default function TripDetailPage() {
 
   return (
     <div className="space-y-6">
+      {/* Banner Informativo de Imutabilidade / Governança */}
+      {isTripLocked && (
+        <div
+          role="alert"
+          className="bg-amber-50 border-2 border-amber-300 rounded-xl p-4 sm:p-4.5 text-amber-950 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-fade-in"
+        >
+          <div className="flex items-start sm:items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-amber-200/80 text-amber-900 flex items-center justify-center shrink-0">
+              <Lock className="w-5 h-5" />
+            </div>
+            <div className="space-y-0.5">
+              <h3 className="font-bold text-sm sm:text-base text-amber-950 flex items-center gap-2">
+                <span>
+                  🔒 Esta viagem está fechada/reembolsada e seus dados estão bloqueados para edição
+                </span>
+              </h3>
+              <p className="text-xs text-amber-800 leading-relaxed">
+                Status atual:{' '}
+                <strong className="underline decoration-amber-400 underline-offset-2">
+                  {statusConf.label}
+                </strong>
+                . Despesas não podem ser inseridas, alteradas ou excluídas, e os dados principais da
+                viagem estão protegidos por governança. Exportação e envio de relatório continuam
+                disponíveis.
+              </p>
+            </div>
+          </div>
+          <Button
+            size="sm"
+            onClick={() => navigate('/reports')}
+            className="bg-[#1e40af] hover:bg-[#1d3d9e] text-white text-xs font-semibold shrink-0 gap-1.5 shadow-xs w-full sm:w-auto"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5" />
+            <span>Ver Relatório Oficial</span>
+          </Button>
+        </div>
+      )}
+
       {/* Back button & quick navigation */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <Button
@@ -543,10 +669,10 @@ export default function TripDetailPage() {
           {isTripLocked ? (
             <div
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-slate-100 border border-slate-200 text-slate-500 text-xs font-medium cursor-not-allowed select-none"
-              title="Viagem fechada — exclusão bloqueada permanentemente após emissão do pedido de reembolso"
+              title="Viagem fechada, auditada ou reembolsada — exclusão bloqueada por regra de governança"
             >
               <Lock className="w-3.5 h-3.5 text-slate-400" />
-              <span>Viagem fechada — exclusão bloqueada</span>
+              <span>Viagem bloqueada para exclusão</span>
             </div>
           ) : (
             <Button
@@ -566,8 +692,12 @@ export default function TripDetailPage() {
             onClick={() => setEditTripOpen(true)}
             className="text-xs gap-1.5"
           >
-            <Edit className="w-3.5 h-3.5" />
-            <span>Editar Viagem</span>
+            {isTripLocked ? (
+              <Lock className="w-3.5 h-3.5 text-slate-500" />
+            ) : (
+              <Edit className="w-3.5 h-3.5" />
+            )}
+            <span>{isTripLocked ? 'Ver / Alterar Status' : 'Editar Viagem'}</span>
           </Button>
 
           <Button
@@ -837,26 +967,36 @@ export default function TripDetailPage() {
           </div>
 
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => navigate('/upload')}
-              disabled={isTripLocked}
-              className="text-xs gap-1.5 text-slate-700 disabled:opacity-50"
-            >
-              <Upload className="w-3.5 h-3.5" />
-              Upload em Lote
-            </Button>
+            {!isTripLocked ? (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => navigate('/upload')}
+                  className="text-xs gap-1.5 text-slate-700"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  Upload em Lote
+                </Button>
 
-            <Button
-              size="sm"
-              onClick={() => setAddExpenseOpen(true)}
-              disabled={isTripLocked}
-              className="bg-[#1e40af] hover:bg-[#1d3d9e] text-white text-xs gap-1.5 shadow-sm disabled:opacity-50"
-            >
-              {isTripLocked ? <Lock className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
-              {isTripLocked ? 'Adição Bloqueada' : 'Adicionar Comprovante Manualmente'}
-            </Button>
+                <Button
+                  size="sm"
+                  onClick={() => setAddExpenseOpen(true)}
+                  className="bg-[#1e40af] hover:bg-[#1d3d9e] text-white text-xs gap-1.5 shadow-sm"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Adicionar Comprovante
+                </Button>
+              </>
+            ) : (
+              <div
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-slate-100 border border-slate-200 text-slate-500 text-xs font-medium cursor-not-allowed select-none"
+                title="Viagem fechada/reembolsada — adição de despesas bloqueada"
+              >
+                <Lock className="w-3.5 h-3.5 text-slate-400" />
+                <span>Upload e adição bloqueados</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1050,27 +1190,38 @@ export default function TripDetailPage() {
                             size="sm"
                             onClick={() => setViewingExpense(exp)}
                             className="h-7 w-7 p-0 text-slate-500 hover:text-blue-600"
-                            title="Visualizar Comprovante (Segunda visualização)"
+                            title="Visualizar Comprovante"
                           >
                             <Eye className="w-3.5 h-3.5" />
                           </Button>
                           {isTripLocked ? (
                             <div
-                              className="h-7 w-7 flex items-center justify-center text-slate-300 cursor-not-allowed"
-                              title="Viagem fechada — exclusão de despesa bloqueada"
+                              className="inline-flex items-center gap-1 text-slate-300 cursor-not-allowed select-none px-1"
+                              title="Viagem fechada/reembolsada — edição e exclusão de despesas bloqueadas"
                             >
                               <Lock className="w-3.5 h-3.5" />
                             </div>
                           ) : (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setExpenseToDelete(exp)}
-                              className="h-7 w-7 p-0 text-slate-400 hover:text-rose-600"
-                              title="Excluir Comprovante e Arquivo"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </Button>
+                            <>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleOpenEditExpense(exp)}
+                                className="h-7 w-7 p-0 text-slate-400 hover:text-blue-600 hover:bg-blue-50"
+                                title="Editar Despesa"
+                              >
+                                <Edit className="w-3.5 h-3.5" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setExpenseToDelete(exp)}
+                                className="h-7 w-7 p-0 text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                                title="Excluir Comprovante e Arquivo"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </Button>
+                            </>
                           )}
                         </div>
                       </td>
@@ -1379,10 +1530,34 @@ export default function TripDetailPage() {
       <Dialog open={editTripOpen} onOpenChange={setEditTripOpen}>
         <DialogContent className="sm:max-w-[480px]">
           <DialogHeader>
-            <DialogTitle className="text-base font-bold text-slate-900">
-              Editar Dados da Viagem
+            <DialogTitle className="text-base font-bold text-slate-900 flex items-center gap-2">
+              {isTripLocked ? (
+                <Lock className="w-4 h-4 text-amber-600" />
+              ) : (
+                <Edit className="w-4 h-4 text-blue-600" />
+              )}
+              <span>
+                {isTripLocked
+                  ? 'Alterar Status da Viagem (Bloqueada para Edição)'
+                  : 'Editar Dados da Viagem'}
+              </span>
             </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              {isTripLocked
+                ? 'Esta viagem está em modo somente leitura devido ao seu status atual. Os campos cadastrais estão bloqueados para edição.'
+                : 'Atualize os dados cadastrais da viagem corporativa.'}
+            </DialogDescription>
           </DialogHeader>
+
+          {isTripLocked && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-xs flex items-center gap-2">
+              <Lock className="w-4 h-4 text-amber-700 shrink-0" />
+              <span>
+                🔒 <strong>Modo Somente Leitura:</strong> Esta viagem está fechada/reembolsada e
+                seus dados estão bloqueados para edição. Apenas a transição de status é permitida.
+              </span>
+            </div>
+          )}
 
           <div className="space-y-3 pt-2">
             <div className="space-y-1">
@@ -1390,7 +1565,38 @@ export default function TripDetailPage() {
               <Input
                 value={editDestination}
                 onChange={(e) => setEditDestination(e.target.value)}
-                className="text-xs"
+                disabled={isTripLocked}
+                className="text-xs disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-xs font-semibold text-slate-700">Período da Viagem</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <Input
+                  type="date"
+                  value={trip.start_date}
+                  disabled
+                  className="text-xs bg-slate-100 text-slate-500 cursor-not-allowed"
+                  title="Data de início (somente leitura)"
+                />
+                <Input
+                  type="date"
+                  value={trip.end_date}
+                  disabled
+                  className="text-xs bg-slate-100 text-slate-500 cursor-not-allowed"
+                  title="Data de término (somente leitura)"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-xs font-semibold text-slate-700">Tipo de Transporte</Label>
+              <Input
+                value={TRANSPORT_LABELS[trip.transport_type]}
+                disabled
+                className="text-xs bg-slate-100 text-slate-500 cursor-not-allowed"
+                title="Tipo de transporte (somente leitura)"
               />
             </div>
 
@@ -1416,7 +1622,8 @@ export default function TripDetailPage() {
                 rows={2}
                 value={editMotivo}
                 onChange={(e) => setEditMotivo(e.target.value)}
-                className="text-xs resize-none"
+                disabled={isTripLocked}
+                className="text-xs resize-none disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
               />
             </div>
           </div>
@@ -1438,6 +1645,115 @@ export default function TripDetailPage() {
               Salvar Alterações
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Single Expense Modal (quando viagem aberta) */}
+      <Dialog open={!!editingExpense} onOpenChange={(open) => !open && setEditingExpense(null)}>
+        <DialogContent className="sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold text-slate-900 flex items-center gap-2">
+              <Edit className="w-4 h-4 text-blue-600" />
+              Editar Despesa
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Arquivo: {editingExpense?.file_name}
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleSaveExpenseEdits} className="space-y-3 pt-2">
+            <div className="space-y-1">
+              <Label className="text-xs font-semibold text-slate-700">Estabelecimento *</Label>
+              <Input
+                value={editExpMerchant}
+                onChange={(e) => setEditExpMerchant(e.target.value)}
+                required
+                className="text-xs"
+                disabled={isUpdatingExpense}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs font-semibold text-slate-700">Data de Emissão *</Label>
+                <Input
+                  type="date"
+                  value={editExpDate}
+                  onChange={(e) => setEditExpDate(e.target.value)}
+                  required
+                  className="text-xs"
+                  disabled={isUpdatingExpense}
+                />
+              </div>
+
+              <div className="space-y-1">
+                <Label className="text-xs font-semibold text-slate-700">Valor (R$) *</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={editExpAmount}
+                  onChange={(e) => setEditExpAmount(e.target.value)}
+                  required
+                  className="text-xs tabular-nums"
+                  disabled={isUpdatingExpense}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-xs font-semibold text-slate-700">Categoria *</Label>
+              <Select
+                value={editExpCategory}
+                onValueChange={(val) => setEditExpCategory(val as ExpenseCategory)}
+                disabled={isUpdatingExpense}
+              >
+                <SelectTrigger className="text-xs">
+                  <SelectValue placeholder="Selecione a categoria" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(Object.keys(CATEGORY_LABELS) as ExpenseCategory[]).map((cat) => (
+                    <SelectItem key={cat} value={cat}>
+                      {CATEGORY_LABELS[cat]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-xs font-semibold text-slate-700">CNPJ (opcional)</Label>
+              <Input
+                value={editExpCnpj}
+                onChange={(e) => setEditExpCnpj(e.target.value)}
+                placeholder="00.000.000/0000-00"
+                className="text-xs"
+                disabled={isUpdatingExpense}
+              />
+            </div>
+
+            <DialogFooter className="pt-3 gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setEditingExpense(null)}
+                disabled={isUpdatingExpense}
+                className="text-xs"
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={isUpdatingExpense}
+                className="bg-[#1e40af] text-white text-xs gap-1"
+              >
+                {isUpdatingExpense ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                <span>Salvar Despesa</span>
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 

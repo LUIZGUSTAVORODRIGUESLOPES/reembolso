@@ -31,7 +31,11 @@ import {
   Loader2,
   DollarSign,
   Mail,
+  RotateCcw,
+  Unlock,
+  Send,
 } from 'lucide-react'
+import { reportEmailService } from '@/services/reportEmailService'
 import { DocumentViewer } from '@/components/DocumentViewer'
 import { storageService } from '@/services/storageService'
 import { Trip, Expense, AuditEvaluationRule, ExpenseCategory, TripStatus } from '@/types/database'
@@ -86,7 +90,7 @@ export default function TripDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { toast } = useToast()
-  const { user, profile, loading: authLoading } = useAuth()
+  const { user, profile, isAdmin, loading: authLoading } = useAuth()
 
   const [trip, setTrip] = useState<Trip | null>(null)
   const [expenses, setExpenses] = useState<Expense[]>([])
@@ -156,6 +160,25 @@ export default function TripDetailPage() {
 
   // Settle Trip Modal
   const [settleModalOpen, setSettleModalOpen] = useState(false)
+
+  // Reopen Trip Modal (Governança: apenas admin, motivo min 10 chars)
+  const [reopenDialogOpen, setReopenDialogOpen] = useState(false)
+  const [reopenReason, setReopenReason] = useState('')
+  const [reopeningTrip, setReopeningTrip] = useState(false)
+
+  // Send / Resend Email Modal
+  const [emailModalOpen, setEmailModalOpen] = useState(false)
+  const [emailTo, setEmailTo] = useState('financeiro@empresa.com.br')
+  const [emailSubject, setEmailSubject] = useState('')
+  const [emailBody, setEmailBody] = useState('')
+  const [attachPdf, setAttachPdf] = useState(true)
+  const [attachReceipts, setAttachReceipts] = useState(true)
+  const [sendingEmail, setSendingEmail] = useState(false)
+  const [emailSentSuccess, setEmailSentSuccess] = useState(false)
+  const [emailSendingStep, setEmailSendingStep] = useState<string | null>(null)
+  const [emailErrorMsg, setEmailErrorMsg] = useState<string | null>(null)
+  const [emailErrorAction, setEmailErrorAction] = useState<string | null>(null)
+  const [emailRawError, setEmailRawError] = useState<string | null>(null)
 
   // Edit Trip Modal
   const [editTripOpen, setEditTripOpen] = useState(false)
@@ -655,6 +678,188 @@ export default function TripDetailPage() {
     }
   }
 
+  // Abertura do modal de e-mail na TripDetailPage
+  const handleOpenTripEmailModal = () => {
+    if (!trip) return
+    const collaboratorName =
+      trip.user_profile?.full_name ||
+      profile?.full_name ||
+      user?.user_metadata?.full_name ||
+      'Colaborador Solicitante'
+
+    if (trip.report_sent_to) {
+      setEmailTo(trip.report_sent_to)
+    }
+
+    setEmailSubject(
+      `${trip.report_sent_at ? 'Reenvio: ' : ''}Prestação de Contas — ${trip.destination} (${formatDateRangeBR(
+        trip.start_date,
+        trip.end_date,
+      )})`,
+    )
+    setEmailBody(
+      `Olá,\n\nSegue em anexo a prestação de contas consolidada referente à viagem corporativa para ${
+        trip.destination
+      }.\n\n• Período: ${formatDateRangeBR(trip.start_date, trip.end_date)}\n• Solicitante: ${collaboratorName}\n• Total de Despesas: ${formatCurrencyBRL(
+        trip.total_amount,
+      )}\n• Quantidade de Comprovantes: ${expenses.length}\n• Motivo: ${
+        trip.motivo
+      }\n\nTodos os comprovantes foram conferidos conforme as diretrizes de compliance.\n\nAtenciosamente,\n${collaboratorName}`,
+    )
+    setEmailSentSuccess(false)
+    setEmailErrorMsg(null)
+    setEmailErrorAction(null)
+    setEmailRawError(null)
+    setEmailSendingStep(null)
+    setEmailModalOpen(true)
+  }
+
+  const handleSendReportEmail = async () => {
+    if (!trip) return
+    const trimmedTo = emailTo.trim()
+    if (!trimmedTo || !trimmedTo.includes('@')) {
+      toast({
+        title: 'Destinatário inválido',
+        description: 'Informe um endereço de e-mail corporativo válido.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    setSendingEmail(true)
+    setEmailErrorMsg(null)
+    setEmailErrorAction(null)
+    setEmailRawError(null)
+    setEmailSendingStep('Preparando relatório consolidado...')
+
+    try {
+      const collaboratorName =
+        trip.user_profile?.full_name ||
+        profile?.full_name ||
+        user?.user_metadata?.full_name ||
+        user?.email?.split('@')[0] ||
+        'Colaborador Solicitante'
+
+      const result = await reportEmailService.sendReportEmail({
+        to: trimmedTo,
+        subject: emailSubject.trim(),
+        body: emailBody.trim(),
+        trip,
+        expenses,
+        collaboratorName,
+        attachPdf,
+        attachReceipts,
+        onProgress: (stepText) => {
+          setEmailSendingStep(stepText)
+        },
+      })
+
+      if (result.success) {
+        setEmailSentSuccess(true)
+
+        // Registrar no banco de dados que o relatório desta viagem foi enviado (ou reenviado) por e-mail
+        try {
+          const currentUserName =
+            profile?.full_name ||
+            user?.user_metadata?.full_name ||
+            user?.email?.split('@')[0] ||
+            'Usuário'
+          const updatedTrip = await storageService.markReportEmailSent(
+            trip.id,
+            trimmedTo,
+            user ? { id: user.id, name: currentUserName } : null,
+          )
+          if (updatedTrip) {
+            setTrip(updatedTrip)
+          }
+        } catch (markErr) {
+          console.warn('Falha ao registrar marcação de e-mail enviado na viagem:', markErr)
+        }
+
+        toast({
+          title: trip.report_sent_at
+            ? 'Relatório reenviado com sucesso!'
+            : 'Relatório enviado por e-mail!',
+          description: `Prestação de contas entregue para ${trimmedTo}. Status atualizado na auditoria.`,
+        })
+        loadTripData()
+      } else {
+        setEmailErrorMsg(
+          result.error ||
+            result.message ||
+            'Não foi possível concluir o envio automático pelo servidor.',
+        )
+        setEmailErrorAction(result.errorAction || null)
+        setEmailRawError(result.rawError || null)
+        toast({
+          title: 'Não foi possível enviar o e-mail',
+          description: result.error || result.message || 'Verifique as configurações de e-mail.',
+          variant: 'destructive',
+        })
+      }
+    } catch (err: any) {
+      console.error('Falha inesperada no envio de e-mail:', err)
+      setEmailErrorMsg(err?.message || 'Erro inesperado ao gerar ou enviar o e-mail.')
+      toast({
+        title: 'Erro inesperado no envio',
+        description: err?.message || 'Tente novamente ou utilize o envio manual.',
+        variant: 'destructive',
+      })
+    } finally {
+      setSendingEmail(false)
+      setEmailSendingStep(null)
+    }
+  }
+
+  // Executar reabertura da viagem (Governança: apenas admin, motivo min 10 chars)
+  const handleConfirmReopenTrip = async () => {
+    if (!trip || !isAdmin) return
+    const reason = reopenReason.trim()
+    if (!reason || reason.length < 10) {
+      toast({
+        title: 'Motivo insuficiente',
+        description: 'Por favor, descreva o motivo da reabertura com no mínimo 10 caracteres.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    setReopeningTrip(true)
+    try {
+      const currentUserName =
+        profile?.full_name ||
+        user?.user_metadata?.full_name ||
+        user?.user_metadata?.name ||
+        user?.email ||
+        'Administrador'
+
+      await storageService.reopenTrip({
+        tripId: trip.id,
+        reason,
+        user: user ? { id: user.id, name: currentUserName } : null,
+      })
+
+      toast({
+        title: 'Viagem reaberta com sucesso!',
+        description:
+          'A viagem voltou para o status "Em Triagem". Comprovantes e dados cadastrais agora estão desbloqueados para ajustes.',
+      })
+
+      setReopenDialogOpen(false)
+      setReopenReason('')
+      await loadTripData()
+    } catch (err: any) {
+      console.error('Erro ao reabrir viagem:', err)
+      toast({
+        title: 'Falha ao reabrir viagem',
+        description: storageService.formatDatabaseError(err),
+        variant: 'destructive',
+      })
+    } finally {
+      setReopeningTrip(false)
+    }
+  }
+
   if (authLoading || loading || !trip) {
     return (
       <div className="p-12 text-center text-slate-500">
@@ -777,16 +982,68 @@ export default function TripDetailPage() {
               </p>
             </div>
           </div>
-          <Button
-            size="sm"
-            onClick={() => navigate('/reports')}
-            className="bg-[#1e40af] hover:bg-[#1d3d9e] text-white text-xs font-semibold shrink-0 gap-1.5 shadow-xs w-full sm:w-auto"
-          >
-            <FileSpreadsheet className="w-3.5 h-3.5" />
-            <span>Ver Relatório Oficial</span>
-          </Button>
+          <div className="flex items-center gap-2 w-full sm:w-auto flex-wrap">
+            {isAdmin && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setReopenReason('')
+                  setReopenDialogOpen(true)
+                }}
+                className="bg-amber-100/80 hover:bg-amber-200/80 text-amber-900 border-amber-300 text-xs font-semibold gap-1.5"
+              >
+                <Unlock className="w-3.5 h-3.5 text-amber-800" />
+                <span>Reabrir Viagem</span>
+              </Button>
+            )}
+            <Button
+              size="sm"
+              onClick={() => navigate('/reports')}
+              className="bg-[#1e40af] hover:bg-[#1d3d9e] text-white text-xs font-semibold shrink-0 gap-1.5 shadow-xs w-full sm:w-auto"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>Ver Relatório Oficial</span>
+            </Button>
+          </div>
         </div>
       ) : null}
+
+      {/* Banner Informativo Discreto de Viagem Reaberta */}
+      {trip.reopened_at && trip.status === 'em_triagem' && (
+        <div
+          role="status"
+          className="bg-blue-50/70 border border-blue-200/80 rounded-lg p-3 text-blue-900 text-xs flex items-start sm:items-center justify-between gap-3 animate-fade-in"
+        >
+          <div className="flex items-start sm:items-center gap-2.5">
+            <div className="w-7 h-7 rounded-md bg-blue-100 text-blue-700 flex items-center justify-center shrink-0">
+              <RotateCcw className="w-3.5 h-3.5" />
+            </div>
+            <div className="space-y-0.5 leading-snug">
+              <span className="font-semibold block text-slate-900">
+                Esta viagem foi reaberta em {new Date(trip.reopened_at).toLocaleDateString('pt-BR')}{' '}
+                às{' '}
+                {new Date(trip.reopened_at).toLocaleTimeString('pt-BR', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+                {trip.reopened_by_name ? ` por ${trip.reopened_by_name}` : ''}
+              </span>
+              {trip.reopen_reason && (
+                <p className="text-slate-600 text-[11px]">
+                  <strong>Motivo da reabertura:</strong> {trip.reopen_reason}
+                </p>
+              )}
+            </div>
+          </div>
+          <Badge
+            variant="outline"
+            className="text-[10px] bg-white border-blue-300 text-blue-700 shrink-0 font-medium"
+          >
+            Desbloqueada para ajustes
+          </Badge>
+        </div>
+      )}
 
       {/* Back button & quick navigation */}
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -836,14 +1093,49 @@ export default function TripDetailPage() {
             <span>{isTripLocked ? 'Ver / Alterar Status' : 'Editar Viagem'}</span>
           </Button>
 
+          {/* Botão Enviar / Reenviar Relatório por E-mail */}
           <Button
             size="sm"
+            onClick={handleOpenTripEmailModal}
+            className={`text-xs gap-1.5 shadow-sm font-semibold text-white ${
+              trip.report_sent_at
+                ? 'bg-blue-700 hover:bg-blue-800'
+                : 'bg-[#1e40af] hover:bg-[#1d3d9e]'
+            }`}
+          >
+            {trip.report_sent_at ? (
+              <RotateCcw className="w-3.5 h-3.5" />
+            ) : (
+              <Mail className="w-3.5 h-3.5" />
+            )}
+            <span>{trip.report_sent_at ? 'Reenviar por E-mail' : 'Enviar por E-mail'}</span>
+          </Button>
+
+          <Button
+            size="sm"
+            variant="outline"
             onClick={() => navigate('/reports')}
-            className="bg-[#1e40af] hover:bg-[#1d3d9e] text-white text-xs gap-1.5 shadow-sm font-semibold"
+            className="text-xs gap-1.5 shadow-sm font-semibold"
           >
             <FileSpreadsheet className="w-3.5 h-3.5" />
             <span>Exportar Relatório</span>
           </Button>
+
+          {/* Botão Reabrir Viagem para Admin (quando auditada ou fechada) */}
+          {isAdmin && (trip.status === 'auditada' || trip.status === 'fechada') && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setReopenReason('')
+                setReopenDialogOpen(true)
+              }}
+              className="text-xs gap-1.5 text-amber-800 border-amber-300 hover:bg-amber-50 font-semibold"
+            >
+              <Unlock className="w-3.5 h-3.5 text-amber-700" />
+              <span>Reabrir Viagem</span>
+            </Button>
+          )}
 
           {/* Botão Quitar Viagem: liberado quando relatório enviado por e-mail e viagem ainda não reembolsada */}
           {trip.status !== 'reembolsada' &&
@@ -890,10 +1182,25 @@ export default function TripDetailPage() {
               )}
 
               {trip.report_sent_at && (
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200">
-                  <Mail className="w-3 h-3 text-blue-600" />
-                  <span>Relatório Enviado</span>
-                </span>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200 cursor-help">
+                        <Mail className="w-3 h-3 text-blue-600" />
+                        <span>
+                          Relatório Enviado (
+                          {new Date(trip.report_sent_at).toLocaleDateString('pt-BR')})
+                        </span>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent className="max-w-xs text-xs">
+                      <p className="font-semibold">Último envio por e-mail:</p>
+                      <p>Data: {new Date(trip.report_sent_at).toLocaleString('pt-BR')}</p>
+                      {trip.report_sent_to && <p>Destinatário: {trip.report_sent_to}</p>}
+                      {trip.report_sent_by_name && <p>Enviado por: {trip.report_sent_by_name}</p>}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               )}
 
               <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-slate-700 text-xs font-medium">
@@ -2200,6 +2507,345 @@ export default function TripDetailPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* AlertDialog de Governança: Reabrir Viagem (Exclusivo Administradores) */}
+      <AlertDialog open={reopenDialogOpen} onOpenChange={setReopenDialogOpen}>
+        <AlertDialogContent className="sm:max-w-lg">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-amber-900 flex items-center gap-2 text-base">
+              <Unlock className="w-5 h-5 text-amber-600" />
+              Reabertura de Viagem (Fluxo de Governança)
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-600 text-xs sm:text-sm space-y-3 pt-1">
+              <p>
+                A viagem para <strong className="text-slate-900">{trip.destination}</strong> voltará
+                do status{' '}
+                <strong className="text-amber-800">{TRIP_STATUS_CONFIG[trip.status].label}</strong>{' '}
+                para <strong className="text-blue-700">Em Triagem</strong>.
+              </p>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-950 space-y-1.5 leading-relaxed">
+                <p className="font-semibold flex items-center gap-1.5 text-amber-900">
+                  <ShieldCheck className="w-4 h-4 text-amber-700" />
+                  Rastreabilidade e Desbloqueio:
+                </p>
+                <ul className="list-disc list-inside space-y-1 text-amber-900/90">
+                  <li>
+                    A viagem será desbloqueada para inclusão, edição e exclusão de comprovantes.
+                  </li>
+                  <li>O histórico e o motivo da reabertura ficarão permanentemente gravados.</li>
+                  <li>
+                    Após as correções, a viagem deverá ser reempacotada e o relatório reenviado.
+                  </li>
+                </ul>
+              </div>
+
+              <div className="space-y-1.5 pt-1">
+                <Label
+                  htmlFor="reopen-reason-input"
+                  className="text-xs font-semibold text-slate-800 flex items-center justify-between"
+                >
+                  <span>Motivo obrigatório da reabertura:</span>
+                  <span
+                    className={`text-[11px] font-normal ${reopenReason.trim().length >= 10 ? 'text-emerald-600' : 'text-slate-400'}`}
+                  >
+                    {reopenReason.trim().length}/10 caracteres mín.
+                  </span>
+                </Label>
+                <Textarea
+                  id="reopen-reason-input"
+                  rows={3}
+                  value={reopenReason}
+                  onChange={(e) => setReopenReason(e.target.value)}
+                  placeholder="Ex: Correção de comprovante duplicado de alimentação e ajuste de valor do táxi..."
+                  className="text-xs resize-none"
+                  disabled={reopeningTrip}
+                />
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="pt-2">
+            <AlertDialogCancel disabled={reopeningTrip}>Cancelar</AlertDialogCancel>
+            <Button
+              onClick={handleConfirmReopenTrip}
+              disabled={reopeningTrip || reopenReason.trim().length < 10}
+              className="bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs gap-1.5"
+            >
+              {reopeningTrip ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Reabrindo Viagem...</span>
+                </>
+              ) : (
+                <>
+                  <Unlock className="w-3.5 h-3.5" />
+                  <span>Confirmar Reabertura</span>
+                </>
+              )}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Modal de Envio / Reenvio de Relatório por E-mail */}
+      <Dialog open={emailModalOpen} onOpenChange={setEmailModalOpen}>
+        <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold text-slate-900 flex items-center gap-2">
+              {trip.report_sent_at ? (
+                <RotateCcw className="w-4 h-4 text-blue-600" />
+              ) : (
+                <Mail className="w-4 h-4 text-blue-600" />
+              )}
+              <span>
+                {trip.report_sent_at
+                  ? 'Reenviar Prestação de Contas por E-mail'
+                  : 'Enviar Prestação de Contas por E-mail'}
+              </span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              {trip.report_sent_at
+                ? 'Esta viagem já teve relatório enviado. Você pode reenviar o relatório consolidado atualizado.'
+                : 'Dispare o relatório consolidado diretamente para a controladoria ou gestor com anexo em PDF.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* Banner de último envio */}
+          {trip.report_sent_at && (
+            <div className="p-2.5 bg-blue-50/80 border border-blue-200 rounded-lg text-xs text-blue-900 flex items-start gap-2">
+              <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+              <div className="space-y-0.5 leading-snug">
+                <span className="font-semibold block">Último envio registrado:</span>
+                <p className="text-[11px] text-blue-800">
+                  Enviado em{' '}
+                  <strong>
+                    {new Date(trip.report_sent_at).toLocaleDateString('pt-BR')} às{' '}
+                    {new Date(trip.report_sent_at).toLocaleTimeString('pt-BR', {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </strong>
+                  {trip.report_sent_to && (
+                    <span>
+                      {' '}
+                      para <strong>{trip.report_sent_to}</strong>
+                    </span>
+                  )}
+                  {trip.report_sent_by_name && (
+                    <span>
+                      {' '}
+                      por <strong>{trip.report_sent_by_name}</strong>
+                    </span>
+                  )}
+                  .
+                </p>
+                <p className="text-[10px] text-blue-700 italic">
+                  O reenvio atualizará a data, horário e destinatário do relatório oficial.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {emailSentSuccess ? (
+            <div className="py-6 text-center space-y-3">
+              <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto">
+                <Check className="w-6 h-6" />
+              </div>
+              <h3 className="font-bold text-slate-900 text-base">
+                {trip.report_sent_at
+                  ? 'Relatório Reenviado com Sucesso!'
+                  : 'Relatório Enviado com Sucesso!'}
+              </h3>
+              <p className="text-xs text-slate-600 max-w-sm mx-auto">
+                A prestação de contas foi disparada para <strong>{emailTo}</strong> com o PDF
+                oficial anexado.
+              </p>
+              <div className="pt-2">
+                <Button
+                  size="sm"
+                  onClick={() => setEmailModalOpen(false)}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold"
+                >
+                  Concluir
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3.5 pt-1">
+              <div className="space-y-1">
+                <Label className="text-xs font-semibold text-slate-700">
+                  Destinatário (E-mail Corporativo)
+                </Label>
+                <Input
+                  type="email"
+                  value={emailTo}
+                  onChange={(e) => setEmailTo(e.target.value)}
+                  placeholder="financeiro@empresa.com.br"
+                  className="text-xs h-9"
+                  disabled={sendingEmail}
+                />
+              </div>
+
+              <div className="space-y-1">
+                <Label className="text-xs font-semibold text-slate-700">Assunto</Label>
+                <Input
+                  value={emailSubject}
+                  onChange={(e) => setEmailSubject(e.target.value)}
+                  className="text-xs h-9"
+                  disabled={sendingEmail}
+                />
+              </div>
+
+              <div className="space-y-1">
+                <Label className="text-xs font-semibold text-slate-700">Mensagem</Label>
+                <Textarea
+                  rows={4}
+                  value={emailBody}
+                  onChange={(e) => setEmailBody(e.target.value)}
+                  className="text-xs resize-none"
+                  disabled={sendingEmail}
+                />
+              </div>
+
+              {/* Anexos */}
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2 text-xs">
+                <span className="font-semibold text-slate-700 block text-[11px] uppercase tracking-wide">
+                  Anexos Inclusos:
+                </span>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={attachPdf}
+                    onChange={(e) => setAttachPdf(e.target.checked)}
+                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    disabled={sendingEmail}
+                  />
+                  <span className="text-slate-800">
+                    PDF Consolidado Oficial (capa, demonstrativo gerencial e tabela de comprovantes)
+                  </span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={attachReceipts}
+                    onChange={(e) => setAttachReceipts(e.target.checked)}
+                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    disabled={sendingEmail}
+                  />
+                  <span className="text-slate-800">
+                    Páginas rasterizadas de cada recibo/nota fiscal ({expenses.length} comprovantes)
+                  </span>
+                </label>
+              </div>
+
+              {/* Status de progresso */}
+              {sendingEmail && emailSendingStep && (
+                <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-900 flex items-center gap-2 animate-pulse">
+                  <Loader2 className="w-4 h-4 animate-spin text-blue-600 shrink-0" />
+                  <span>{emailSendingStep}</span>
+                </div>
+              )}
+
+              {/* Mensagem de Erro com Fallback */}
+              {emailErrorMsg && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-900 space-y-2">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <p className="font-semibold">{emailErrorMsg}</p>
+                      {emailErrorAction && (
+                        <p className="text-[11px] text-rose-800">{emailErrorAction}</p>
+                      )}
+                      {emailRawError && (
+                        <pre className="text-[10px] bg-rose-100/60 p-1.5 rounded overflow-x-auto text-rose-950 font-mono">
+                          {emailRawError}
+                        </pre>
+                      )}
+                    </div>
+                  </div>
+                  <div className="pt-1 flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={async () => {
+                        try {
+                          const currentUserName =
+                            profile?.full_name ||
+                            user?.user_metadata?.full_name ||
+                            user?.email?.split('@')[0] ||
+                            'Usuário'
+                          const updatedTrip = await storageService.markReportEmailSent(
+                            trip.id,
+                            emailTo.trim() || 'cliente_email_local',
+                            user ? { id: user.id, name: currentUserName } : null,
+                          )
+                          if (updatedTrip) {
+                            setTrip(updatedTrip)
+                          }
+                        } catch (markErr) {
+                          console.warn('Falha ao registrar marcação via mailto:', markErr)
+                        }
+                        const mailtoUrl = reportEmailService.createMailToLink(
+                          emailTo,
+                          emailSubject,
+                          emailBody,
+                        )
+                        window.location.href = mailtoUrl
+                      }}
+                      className="text-xs h-7 border-rose-300 text-rose-800 hover:bg-rose-100"
+                    >
+                      <Mail className="w-3 h-3 mr-1" />
+                      Abrir no meu aplicativo de e-mail (mailto)
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              <DialogFooter className="pt-2 flex-col sm:flex-row gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEmailModalOpen(false)}
+                  disabled={sendingEmail}
+                  className="text-xs"
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleSendReportEmail}
+                  disabled={sendingEmail}
+                  className={`text-xs gap-1.5 font-semibold text-white ${
+                    trip.report_sent_at
+                      ? 'bg-blue-700 hover:bg-blue-800'
+                      : 'bg-[#1e40af] hover:bg-[#1d3d9e]'
+                  }`}
+                >
+                  {sendingEmail ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>{trip.report_sent_at ? 'Reenviando...' : 'Enviando...'}</span>
+                    </>
+                  ) : (
+                    <>
+                      {trip.report_sent_at ? (
+                        <RotateCcw className="w-3.5 h-3.5" />
+                      ) : (
+                        <Send className="w-3.5 h-3.5" />
+                      )}
+                      <span>
+                        {trip.report_sent_at
+                          ? 'Reenviar Prestação de Contas'
+                          : 'Enviar Prestação de Contas'}
+                      </span>
+                    </>
+                  )}
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

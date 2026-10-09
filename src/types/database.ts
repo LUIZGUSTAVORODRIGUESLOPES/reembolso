@@ -64,6 +64,11 @@ export interface Trip {
   settled_by_id?: string | null
   settled_by_name?: string | null
   settled_at?: string | null
+  // Campos de governança de reabertura
+  reopened_at?: string | null
+  reopened_by_id?: string | null
+  reopened_by_name?: string | null
+  reopen_reason?: string | null
 }
 
 export interface Expense {

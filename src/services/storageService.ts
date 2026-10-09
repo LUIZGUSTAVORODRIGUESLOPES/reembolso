@@ -208,6 +208,10 @@ class SupabaseStorageService {
   /**
    * Registra a marcação de envio de relatório por e-mail para a viagem.
    */
+  /**
+   * Registra a marcação de envio (ou reenvio) de relatório por e-mail para a viagem.
+   * Sobrescreve com os novos dados de envio mantendo a viagem íntegra.
+   */
   public async markReportEmailSent(
     tripId: string,
     sentTo: string,
@@ -222,6 +226,56 @@ class SupabaseStorageService {
     }
     if (user?.name) {
       updates.report_sent_by_name = user.name
+    }
+
+    return this.updateTrip(tripId, updates as any)
+  }
+
+  /**
+   * Reabre uma viagem com status 'auditada' ou 'fechada' voltando para 'em_triagem'.
+   * Fluxo de governança: exige justificativa (motivo) e registra quem reabriu e quando.
+   * Viagens 'reembolsada' (já quitadas) NÃO podem ser reabertas.
+   */
+  public async reopenTrip(params: {
+    tripId: string
+    reason: string
+    user?: { id: string; name: string } | null
+  }): Promise<Trip | null> {
+    const { tripId, reason, user } = params
+    const trimmedReason = (reason || '').trim()
+
+    if (!trimmedReason || trimmedReason.length < 10) {
+      throw new Error('O motivo da reabertura deve conter no mínimo 10 caracteres explicativos.')
+    }
+
+    const currentTrip = await this.getTrip(tripId)
+    if (!currentTrip) {
+      throw new Error('Viagem não encontrada.')
+    }
+
+    if (currentTrip.status === 'reembolsada') {
+      throw new Error(
+        'Viagens com status "reembolsada" (quitadas) não podem ser reabertas. A quitação é definitiva.',
+      )
+    }
+
+    if (currentTrip.status !== 'auditada' && currentTrip.status !== 'fechada') {
+      throw new Error(
+        `Apenas viagens com status "auditada" ou "fechada" podem ser reabertas. A viagem atual está em "${currentTrip.status}".`,
+      )
+    }
+
+    const updates: Record<string, unknown> = {
+      status: 'em_triagem',
+      reopened_at: new Date().toISOString(),
+      reopen_reason: trimmedReason,
+    }
+
+    if (user?.id && this.isValidUuid(user.id)) {
+      updates.reopened_by_id = user.id
+    }
+    if (user?.name) {
+      updates.reopened_by_name = user.name
     }
 
     return this.updateTrip(tripId, updates as any)
@@ -1249,6 +1303,10 @@ class SupabaseStorageService {
       report_sent_to: row.report_sent_to || null,
       report_sent_by_id: row.report_sent_by_id || null,
       report_sent_by_name: row.report_sent_by_name || null,
+      reopened_at: row.reopened_at || null,
+      reopened_by_id: row.reopened_by_id || null,
+      reopened_by_name: row.reopened_by_name || null,
+      reopen_reason: row.reopen_reason || null,
       settlement_date: row.settlement_date || null,
       settlement_amount: row.settlement_amount != null ? Number(row.settlement_amount) : null,
       settlement_deposit_total:

@@ -20,6 +20,7 @@ import {
   Loader2,
   AlertCircle,
   RefreshCw,
+  RotateCcw,
 } from 'lucide-react'
 import { storageService } from '@/services/storageService'
 import { resolveReceiptUrl } from '@/services/receiptFileResolver'
@@ -269,8 +270,12 @@ export default function ReportsPage() {
       user?.user_metadata?.full_name ||
       'Colaborador Solicitante'
 
+    if (selectedTrip.report_sent_to) {
+      setEmailTo(selectedTrip.report_sent_to)
+    }
+
     setEmailSubject(
-      `Prestação de Contas — ${selectedTrip.destination} (${formatDateRangeBR(
+      `${selectedTrip.report_sent_at ? 'Reenvio: ' : ''}Prestação de Contas — ${selectedTrip.destination} (${formatDateRangeBR(
         selectedTrip.start_date,
         selectedTrip.end_date,
       )})`,
@@ -497,7 +502,7 @@ export default function ReportsPage() {
               >
                 <CardContent className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
                   <div className="space-y-1.5">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
                         <MapPin className="w-4 h-4 text-blue-600" />
                         {trip.destination}
@@ -507,8 +512,18 @@ export default function ReportsPage() {
                       >
                         {statusConf.label}
                       </span>
+                      {trip.report_sent_at && (
+                        <span
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-50 text-blue-700 border border-blue-200"
+                          title={`Enviado para ${trip.report_sent_to || 'destinatário'} em ${new Date(trip.report_sent_at).toLocaleString('pt-BR')}${trip.report_sent_by_name ? ` por ${trip.report_sent_by_name}` : ''}`}
+                        >
+                          <Mail className="w-3 h-3 text-blue-600" />
+                          <span>
+                            Enviado ({new Date(trip.report_sent_at).toLocaleDateString('pt-BR')})
+                          </span>
+                        </span>
+                      )}
                     </div>
-
                     <div className="flex items-center gap-3 text-xs text-slate-500 flex-wrap">
                       <span className="flex items-center gap-1">
                         <Calendar className="w-3.5 h-3.5 text-slate-400" />
@@ -765,14 +780,24 @@ export default function ReportsPage() {
                     </div>
                   )}
 
-                  {/* Send Email */}
+                  {/* Send Email / Reenviar por E-mail */}
                   <Button
                     size="sm"
                     onClick={handleOpenEmailModal}
-                    className="w-full sm:w-auto bg-[#1e40af] hover:bg-[#1d3d9e] text-white text-xs gap-1.5"
+                    className={`w-full sm:w-auto text-white text-xs gap-1.5 ${
+                      selectedTrip?.report_sent_at
+                        ? 'bg-blue-700 hover:bg-blue-800'
+                        : 'bg-[#1e40af] hover:bg-[#1d3d9e]'
+                    }`}
                   >
-                    <Send className="w-3.5 h-3.5" />
-                    <span>Enviar por E-mail</span>
+                    {selectedTrip?.report_sent_at ? (
+                      <RotateCcw className="w-3.5 h-3.5" />
+                    ) : (
+                      <Send className="w-3.5 h-3.5" />
+                    )}
+                    <span>
+                      {selectedTrip?.report_sent_at ? 'Reenviar por E-mail' : 'Enviar por E-mail'}
+                    </span>
                   </Button>
                 </div>
               </div>
@@ -786,13 +811,59 @@ export default function ReportsPage() {
         <DialogContent className="sm:max-w-[500px]">
           <DialogHeader>
             <DialogTitle className="text-base font-bold text-slate-900 flex items-center gap-2">
-              <Mail className="w-4 h-4 text-blue-600" />
-              Enviar Prestação de Contas por E-mail
+              {selectedTrip?.report_sent_at ? (
+                <RotateCcw className="w-4 h-4 text-blue-600" />
+              ) : (
+                <Mail className="w-4 h-4 text-blue-600" />
+              )}
+              <span>
+                {selectedTrip?.report_sent_at
+                  ? 'Reenviar Prestação de Contas por E-mail'
+                  : 'Enviar Prestação de Contas por E-mail'}
+              </span>
             </DialogTitle>
             <DialogDescription className="text-xs text-slate-500">
-              Dispare o relatório consolidado diretamente para a controladoria ou gestor.
+              {selectedTrip?.report_sent_at
+                ? 'Esta viagem já teve relatório enviado. Você pode reenviar o relatório consolidado atualizado para o mesmo ou outro destinatário.'
+                : 'Dispare o relatório consolidado diretamente para a controladoria ou gestor.'}
             </DialogDescription>
           </DialogHeader>
+
+          {/* Banner de último envio caso já tenha sido enviado */}
+          {selectedTrip?.report_sent_at && (
+            <div className="p-2.5 bg-blue-50/80 border border-blue-200 rounded-lg text-xs text-blue-900 flex items-start gap-2">
+              <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+              <div className="space-y-0.5 leading-snug">
+                <span className="font-semibold block">Último envio registrado:</span>
+                <p className="text-[11px] text-blue-800">
+                  Enviado em{' '}
+                  <strong>
+                    {new Date(selectedTrip.report_sent_at).toLocaleDateString('pt-BR')} às{' '}
+                    {new Date(selectedTrip.report_sent_at).toLocaleTimeString('pt-BR', {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </strong>
+                  {selectedTrip.report_sent_to && (
+                    <span>
+                      {' '}
+                      para <strong>{selectedTrip.report_sent_to}</strong>
+                    </span>
+                  )}
+                  {selectedTrip.report_sent_by_name && (
+                    <span>
+                      {' '}
+                      por <strong>{selectedTrip.report_sent_by_name}</strong>
+                    </span>
+                  )}
+                  .
+                </p>
+                <p className="text-[10px] text-blue-700 italic">
+                  O novo envio atualizará a data, horário e destinatário do último relatório.
+                </p>
+              </div>
+            </div>
+          )}
 
           {emailSentSuccess ? (
             <div className="py-8 text-center space-y-3">
@@ -1028,12 +1099,24 @@ export default function ReportsPage() {
                   {sendingEmail ? (
                     <>
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      <span>Enviando pelo Servidor...</span>
+                      <span>
+                        {selectedTrip?.report_sent_at
+                          ? 'Reenviando pelo Servidor...'
+                          : 'Enviando pelo Servidor...'}
+                      </span>
                     </>
                   ) : (
                     <>
-                      <Send className="w-3.5 h-3.5" />
-                      <span>Enviar Prestação de Contas</span>
+                      {selectedTrip?.report_sent_at ? (
+                        <RotateCcw className="w-3.5 h-3.5" />
+                      ) : (
+                        <Send className="w-3.5 h-3.5" />
+                      )}
+                      <span>
+                        {selectedTrip?.report_sent_at
+                          ? 'Reenviar Prestação de Contas'
+                          : 'Enviar Prestação de Contas'}
+                      </span>
                     </>
                   )}
                 </Button>

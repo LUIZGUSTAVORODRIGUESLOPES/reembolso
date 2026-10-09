@@ -21,6 +21,16 @@ interface SendEmailPayload {
     motivo?: string
     collaboratorName?: string
   }
+  standaloneRequestDetails?: {
+    id: string
+    description?: string
+    category?: string
+    expenseDate?: string
+    amount?: number
+    notes?: string
+    merchantName?: string
+    collaboratorName?: string
+  }
   expensesSummary?: {
     totalItems?: number
     totalAmount?: number
@@ -161,6 +171,7 @@ Deno.serve(async (req: Request) => {
       subject,
       body: messageBody,
       tripDetails,
+      standaloneRequestDetails,
       expensesSummary,
       attachments: directAttachments,
       storageAttachment,
@@ -220,28 +231,58 @@ Deno.serve(async (req: Request) => {
       )
     }
 
-    // ITEM 2 — Autorização sobre os dados (tripDetails.id)
+    // ITEM 2 — Autorização sobre os dados (tripDetails.id OU standaloneRequestDetails.id)
     const tripId = tripDetails?.id
-    if (!tripId || typeof tripId !== 'string' || !UUID_REGEX.test(tripId)) {
-      return jsonResponse({ error: 'Identificador da viagem inválido ou ausente no payload.' }, 400)
+    const standaloneId = standaloneRequestDetails?.id
+
+    if (!tripId && !standaloneId) {
+      return jsonResponse(
+        { error: 'Identificador da viagem ou da solicitação avulsa ausente no payload.' },
+        400,
+      )
     }
 
-    // Consulta com cliente autenticado do usuário (RLS ativo em public.trips)
-    const { data: tripRow, error: tripQueryError } = await userSupabase
-      .from('trips')
-      .select('id, user_id')
-      .eq('id', tripId)
-      .maybeSingle()
+    if (tripId) {
+      if (typeof tripId !== 'string' || !UUID_REGEX.test(tripId)) {
+        return jsonResponse({ error: 'Identificador da viagem inválido no payload.' }, 400)
+      }
+      // Consulta com cliente autenticado do usuário (RLS ativo em public.trips)
+      const { data: tripRow, error: tripQueryError } = await userSupabase
+        .from('trips')
+        .select('id, user_id')
+        .eq('id', tripId)
+        .maybeSingle()
 
-    if (tripQueryError || !tripRow) {
-      console.warn(
-        `Acesso negado ou viagem não encontrada para tripId=${tripId}, userId=${userId}:`,
-        tripQueryError,
-      )
-      return jsonResponse(
-        { error: 'Você não tem permissão para enviar esta prestação de contas.' },
-        403,
-      )
+      if (tripQueryError || !tripRow) {
+        console.warn(
+          `Acesso negado ou viagem não encontrada para tripId=${tripId}, userId=${userId}:`,
+          tripQueryError,
+        )
+        return jsonResponse(
+          { error: 'Você não tem permissão para enviar esta prestação de contas.' },
+          403,
+        )
+      }
+    } else if (standaloneId) {
+      if (typeof standaloneId !== 'string' || !UUID_REGEX.test(standaloneId)) {
+        return jsonResponse({ error: 'Identificador da solicitação avulsa inválido.' }, 400)
+      }
+      const { data: standaloneRow, error: standaloneQueryError } = await userSupabase
+        .from('standalone_requests')
+        .select('id, user_id')
+        .eq('id', standaloneId)
+        .maybeSingle()
+
+      if (standaloneQueryError || !standaloneRow) {
+        console.warn(
+          `Acesso negado ou solicitação avulsa não encontrada para id=${standaloneId}, userId=${userId}:`,
+          standaloneQueryError,
+        )
+        return jsonResponse(
+          { error: 'Você não tem permissão para enviar esta solicitação avulsa.' },
+          403,
+        )
+      }
     }
 
     // ITEM 2 — Restringir o storageAttachment
@@ -392,31 +433,77 @@ Deno.serve(async (req: Request) => {
     const safeDestination = escapeHtml(tripDetails?.destination)
     const safeStartDate = escapeHtml(tripDetails?.startDate)
     const safeEndDate = escapeHtml(tripDetails?.endDate)
-    const safeCollaborator = escapeHtml(tripDetails?.collaboratorName)
+    const safeCollaborator = escapeHtml(
+      tripDetails?.collaboratorName || standaloneRequestDetails?.collaboratorName,
+    )
     const safeMotivo = escapeHtml(tripDetails?.motivo)
     const safeMessageBody = escapeHtml(messageBody)
+
+    // Detalhes de solicitação avulsa
+    const safeStandaloneDesc = escapeHtml(standaloneRequestDetails?.description)
+    const safeStandaloneCategory = escapeHtml(standaloneRequestDetails?.category)
+    const safeStandaloneDate = escapeHtml(standaloneRequestDetails?.expenseDate)
+    const safeStandaloneMerchant = escapeHtml(standaloneRequestDetails?.merchantName)
+    const safeStandaloneNotes = escapeHtml(standaloneRequestDetails?.notes)
+    const safeStandaloneAmount =
+      standaloneRequestDetails?.amount !== undefined
+        ? Number(standaloneRequestDetails.amount).toFixed(2)
+        : null
+
     const safeTotalItems =
-      expensesSummary?.totalItems !== undefined ? Number(expensesSummary.totalItems) : null
+      expensesSummary?.totalItems !== undefined
+        ? Number(expensesSummary.totalItems)
+        : standaloneRequestDetails
+          ? 1
+          : null
     const safeTotalAmount =
-      tripDetails?.totalAmount !== undefined ? Number(tripDetails.totalAmount).toFixed(2) : null
+      tripDetails?.totalAmount !== undefined
+        ? Number(tripDetails.totalAmount).toFixed(2)
+        : safeStandaloneAmount
+
+    const isStandalone = Boolean(standaloneRequestDetails)
 
     const formattedHtml = `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b; max-width: 620px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
         <div style="border-bottom: 2px solid #1e40af; padding-bottom: 16px; margin-bottom: 20px;">
           <h2 style="color: #1e40af; margin: 0 0 6px 0; font-size: 20px;">Reembolso.ai Corporativo</h2>
-          <p style="color: #64748b; margin: 0; font-size: 13px;">Prestação de Contas e Relatório de Despesas</p>
+          <p style="color: #64748b; margin: 0; font-size: 13px;">${
+            isStandalone
+              ? 'Solicitação Avulsa de Reembolso'
+              : 'Prestação de Contas e Relatório de Despesas de Viagem'
+          }</p>
         </div>
 
         <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
           <h3 style="margin: 0 0 10px 0; color: #0f172a; font-size: 15px;">Resumo da Solicitação</h3>
           <table style="width: 100%; font-size: 13px; line-height: 1.6; border-collapse: collapse;">
             ${
-              safeDestination
+              isStandalone && safeStandaloneDesc
+                ? `<tr><td style="color: #64748b; width: 140px;">Descrição:</td><td><strong>${safeStandaloneDesc}</strong></td></tr>`
+                : ''
+            }
+            ${
+              isStandalone && safeStandaloneCategory
+                ? `<tr><td style="color: #64748b;">Categoria:</td><td><span style="background:#e0e7ff;color:#3730a3;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">${safeStandaloneCategory}</span></td></tr>`
+                : ''
+            }
+            ${
+              isStandalone && safeStandaloneDate
+                ? `<tr><td style="color: #64748b;">Data da Despesa:</td><td>${safeStandaloneDate}</td></tr>`
+                : ''
+            }
+            ${
+              isStandalone && safeStandaloneMerchant
+                ? `<tr><td style="color: #64748b;">Estabelecimento:</td><td>${safeStandaloneMerchant}</td></tr>`
+                : ''
+            }
+            ${
+              !isStandalone && safeDestination
                 ? `<tr><td style="color: #64748b; width: 140px;">Destino:</td><td><strong>${safeDestination}</strong></td></tr>`
                 : ''
             }
             ${
-              safeStartDate
+              !isStandalone && safeStartDate
                 ? `<tr><td style="color: #64748b;">Período:</td><td>${safeStartDate}${safeEndDate ? ` a ${safeEndDate}` : ''}</td></tr>`
                 : ''
             }
@@ -426,13 +513,18 @@ Deno.serve(async (req: Request) => {
                 : ''
             }
             ${
-              safeMotivo
+              !isStandalone && safeMotivo
                 ? `<tr><td style="color: #64748b;">Motivo:</td><td>${safeMotivo}</td></tr>`
                 : ''
             }
             ${
+              isStandalone && safeStandaloneNotes
+                ? `<tr><td style="color: #64748b;">Observações:</td><td>${safeStandaloneNotes}</td></tr>`
+                : ''
+            }
+            ${
               safeTotalItems !== null
-                ? `<tr><td style="color: #64748b;">Comprovantes:</td><td>${safeTotalItems} anexos auditados</td></tr>`
+                ? `<tr><td style="color: #64748b;">Comprovantes:</td><td>${safeTotalItems} anexo auditado</td></tr>`
                 : ''
             }
             ${
@@ -455,14 +547,14 @@ Deno.serve(async (req: Request) => {
         ${
           resendAttachments.length > 0
             ? `<div style="background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 12px; margin-bottom: 20px; font-size: 12px; color: #1e40af;">
-                <strong>📎 Documento em anexo:</strong> O relatório consolidado de prestação de contas com os comprovantes auditados está anexado a este e-mail em formato PDF.
+                <strong>📎 Documento em anexo:</strong> O relatório consolidado de prestação de contas com o comprovante auditado está anexado a este e-mail em formato PDF.
               </div>`
             : ''
         }
 
         <div style="border-top: 1px solid #e2e8f0; padding-top: 16px; font-size: 11px; color: #94a3b8; text-align: center;">
           Este e-mail foi gerado automaticamente pelo sistema Reembolso.ai Corporativo.<br/>
-          Todos os comprovantes foram conferidos via OCR e auditados pelas regras corporativas.
+          O comprovante foi conferido via OCR e auditado pelas políticas corporativas.
         </div>
       </div>
     `

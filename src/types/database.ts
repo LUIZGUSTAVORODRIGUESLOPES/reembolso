@@ -37,6 +37,51 @@ export interface Profile {
   trips_count?: number
 }
 
+export type StandaloneRequestStatus = 'em_triagem' | 'empacotada' | 'quitada'
+
+export interface StandaloneRequest {
+  id: string
+  user_id: string
+  description: string
+  category: string
+  expense_date: string // YYYY-MM-DD
+  amount: number
+  notes?: string | null
+  merchant_name?: string | null
+  cnpj?: string | null
+  receipt_url: string
+  receipt_file_name: string
+  receipt_storage_path?: string | null
+  ocr_raw_text?: string | null
+  status: StandaloneRequestStatus
+
+  // Rastreamento de envio por e-mail (empacotamento)
+  report_sent_at?: string | null
+  report_sent_to?: string | null
+  report_sent_by_id?: string | null
+  report_sent_by_name?: string | null
+
+  // Quitação
+  settlement_date?: string | null // YYYY-MM-DD
+  settlement_amount?: number | null
+  settlement_deposit_total?: number | null
+  settlement_batch_id?: string | null
+  settlement_batch_count?: number | null
+  settled_by_id?: string | null
+  settled_by_name?: string | null
+  settled_at?: string | null
+
+  // Governança de reabertura
+  reopened_at?: string | null
+  reopened_by_id?: string | null
+  reopened_by_name?: string | null
+  reopen_reason?: string | null
+
+  created_at: string
+  updated_at: string
+  user_profile?: Profile | null
+}
+
 export interface Trip {
   id: string
   user_id: string

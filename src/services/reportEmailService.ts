@@ -1,6 +1,6 @@
 import { supabase } from '@/lib/supabase/client'
-import { Trip, Expense } from '@/types/database'
-import { generateConsolidatedReportBlob } from './reportExportService'
+import { Trip, Expense, StandaloneRequest } from '@/types/database'
+import { generateConsolidatedReportBlob, generateStandaloneReportBlob } from './reportExportService'
 
 export interface EmailProviderConfigStatus {
   configured: boolean
@@ -12,8 +12,9 @@ export interface SendReportEmailParams {
   to: string
   subject: string
   body: string
-  trip: Trip
-  expenses: Expense[]
+  trip?: Trip
+  expenses?: Expense[]
+  standaloneRequest?: StandaloneRequest
   collaboratorName?: string
   attachPdf?: boolean
   attachReceipts?: boolean
@@ -188,12 +189,12 @@ class ReportEmailService {
       subject,
       body,
       trip,
-      expenses,
+      expenses = [],
+      standaloneRequest,
       collaboratorName,
       attachPdf = true,
       onProgress,
     } = params
-
     try {
       // Validar sessão ativa antes de iniciar o processo de envio
       const { data: sessionData } = await supabase.auth.getSession()
@@ -211,12 +212,12 @@ class ReportEmailService {
 
       const currentUserId = currentSession.user.id
 
-      if (!trip?.id) {
+      if (!trip?.id && !standaloneRequest?.id) {
         return {
           success: false,
           configured: false,
-          error: 'Identificador da viagem inválido.',
-          message: 'Não foi possível identificar a viagem para envio do relatório.',
+          error: 'Identificador da viagem ou da solicitação avulsa ausente.',
+          message: 'Não foi possível identificar o item para envio por e-mail.',
           mailToFallback: { to, subject, body },
         }
       }
@@ -234,14 +235,32 @@ class ReportEmailService {
       if (attachPdf) {
         onProgress?.('Gerando PDF consolidado com todos os comprovantes...')
         try {
-          const { blob, filename } = await generateConsolidatedReportBlob(
-            trip,
-            expenses,
-            collaboratorName,
-            (curr, tot, msg) => {
-              onProgress?.(`${msg} (${Math.round((curr / tot) * 100)}%)`)
-            },
-          )
+          let generatedBlob: Blob
+          let generatedFilename: string
+
+          if (standaloneRequest) {
+            const res = await generateStandaloneReportBlob(
+              standaloneRequest,
+              collaboratorName,
+              (msg) => onProgress?.(msg),
+            )
+            generatedBlob = res.blob
+            generatedFilename = res.filename
+          } else {
+            const res = await generateConsolidatedReportBlob(
+              trip!,
+              expenses,
+              collaboratorName,
+              (curr, tot, msg) => {
+                onProgress?.(`${msg} (${Math.round((curr / tot) * 100)}%)`)
+              },
+            )
+            generatedBlob = res.blob
+            generatedFilename = res.filename
+          }
+
+          const blob = generatedBlob
+          const filename = generatedFilename
 
           const pdfSizeBytes = blob.size
           const pdfSizeMb = (pdfSizeBytes / (1024 * 1024)).toFixed(2)
@@ -320,7 +339,10 @@ class ReportEmailService {
         to,
         subject,
         body,
-        tripDetails: {
+      }
+
+      if (trip?.id) {
+        payload.tripDetails = {
           id: trip.id,
           destination: trip.destination,
           startDate: trip.start_date,
@@ -328,11 +350,26 @@ class ReportEmailService {
           totalAmount: trip.total_amount,
           motivo: trip.motivo,
           collaboratorName,
-        },
-        expensesSummary: {
+        }
+        payload.expensesSummary = {
           totalItems: expenses.length,
           totalAmount: trip.total_amount,
-        },
+        }
+      } else if (standaloneRequest?.id) {
+        payload.standaloneRequestDetails = {
+          id: standaloneRequest.id,
+          description: standaloneRequest.description,
+          category: standaloneRequest.category,
+          expenseDate: standaloneRequest.expense_date,
+          amount: standaloneRequest.amount,
+          notes: standaloneRequest.notes || '',
+          merchantName: standaloneRequest.merchant_name || '',
+          collaboratorName,
+        }
+        payload.expensesSummary = {
+          totalItems: 1,
+          totalAmount: standaloneRequest.amount,
+        }
       }
 
       if (storageAttachmentPayload) {

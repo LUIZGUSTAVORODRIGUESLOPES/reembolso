@@ -1,4 +1,4 @@
-import { Trip, Expense } from '@/types/database'
+import { Trip, Expense, StandaloneRequest } from '@/types/database'
 import {
   formatCurrencyBRL,
   formatDateBR,
@@ -6,6 +6,52 @@ import {
   CATEGORY_LABELS,
 } from '@/lib/formatters'
 import { prepareReceiptAttachment, PreparedReceiptAttachment } from './receiptRasterService'
+
+/**
+ * Exporta uma Solicitação Avulsa para planilha CSV com BOM UTF-8 compatível com Excel
+ */
+export function exportStandaloneRequestToExcel(req: StandaloneRequest): void {
+  const lines: string[] = []
+
+  lines.push(`SOLICITAÇÃO AVULSA DE REEMBOLSO`)
+  lines.push(`Gerado em;${new Date().toLocaleString('pt-BR')}`)
+  lines.push(`Código / ID;${req.id}`)
+  lines.push(`Descrição;${req.description.replace(/"/g, '""')}`)
+  lines.push(`Categoria;${req.category}`)
+  lines.push(`Data da Despesa;${formatDateBR(req.expense_date)}`)
+  lines.push(`Estabelecimento;${(req.merchant_name || '').replace(/"/g, '""')}`)
+  lines.push(`CNPJ;${req.cnpj || ''}`)
+  lines.push(`Status;${req.status.toUpperCase()}`)
+  lines.push(`Colaborador Solicitante;${req.user_profile?.full_name || 'Solicitante'}`)
+  lines.push(`Arquivo do Comprovante;${req.receipt_file_name}`)
+  if (req.notes) {
+    lines.push(`Observações;${req.notes.replace(/"/g, '""')}`)
+  }
+  lines.push(``)
+
+  lines.push(`Item;Data;Descrição;Categoria;Estabelecimento;CNPJ;Valor (R$);Status`)
+  lines.push(
+    `1;${formatDateBR(req.expense_date)};"${req.description.replace(/"/g, '""')}";"${req.category}";"${(req.merchant_name || '').replace(/"/g, '""')}";"${req.cnpj || ''}";${req.amount.toFixed(2).replace('.', ',')};"${req.status.toUpperCase()}"`,
+  )
+
+  lines.push(``)
+  lines.push(`;;;;TOTAL REEMBOLSÁVEL;${req.amount.toFixed(2).replace('.', ',')};`)
+
+  const csvContent = '\uFEFF' + lines.join('\r\n')
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  const safeDesc = req.description
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '_')
+    .slice(0, 30)
+  a.download = `solicitacao_avulsa_${safeDesc}_${req.expense_date}.csv`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
 
 /**
  * Downloads a structured Excel-compatible spreadsheet (.xlsx or .csv formatted UTF-8 with BOM)
@@ -745,4 +791,409 @@ export async function generateConsolidatedReportBlob(
   const rawFilename = `relatorio_prestacao_${trip.destination.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${trip.start_date}.pdf`
   const blob = doc.output('blob')
   return { blob, filename: rawFilename }
+}
+
+/**
+ * Gera o documento PDF binário (Blob) para uma Solicitação Avulsa de Reembolso
+ * com layout formal corporativo:
+ * - Cabeçalho institucional Reembolso.ai Corporativo
+ * - Resumo dos dados fiscais da solicitação avulsa
+ * - Rótulo e valor total sem sobreposição (padrão v0.0.28)
+ * - Campos de assinatura
+ * - Comprovante anexado renderizado/rasterizado em página dedicada
+ */
+export async function generateStandaloneReportBlob(
+  req: StandaloneRequest,
+  collaboratorName?: string,
+  onProgress?: (message: string) => void,
+): Promise<{ blob: Blob; filename: string }> {
+  const JsPDFClass = await loadJsPdfLibrary()
+  const doc = new JsPDFClass({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+    compress: true,
+  })
+
+  const pageWidth = doc.internal.pageSize.getWidth() // 210mm
+  const pageHeight = doc.internal.pageSize.getHeight() // 297mm
+  const margin = 15
+  const contentWidth = pageWidth - margin * 2
+
+  onProgress?.('Gerando cabeçalho corporativo da solicitação avulsa...')
+
+  // Banner superior
+  doc.setFillColor(30, 64, 175) // #1e40af
+  doc.rect(margin, margin, contentWidth, 18, 'F')
+  doc.setTextColor(255, 255, 255)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(14)
+  doc.text('REEMBOLSO.AI CORPORATIVO', margin + 6, margin + 8)
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(8.5)
+  doc.text('Solicitação Avulsa de Reembolso (Fora de Viagem)', margin + 6, margin + 14)
+
+  // Badge de status
+  const statusStr = (req.status || 'EM_TRIAGEM').toUpperCase().replace('_', ' ')
+  doc.setFillColor(255, 255, 255)
+  doc.roundedRect(pageWidth - margin - 36, margin + 4.5, 32, 8, 2, 2, 'F')
+  doc.setTextColor(30, 64, 175)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(7.5)
+  doc.text(statusStr, pageWidth - margin - 20, margin + 9.5, { align: 'center' })
+
+  // Cartão com metadados da despesa avulsa
+  let curY = margin + 24
+  doc.setFillColor(248, 250, 252) // #f8fafc
+  doc.setDrawColor(226, 232, 240) // #e2e8f0
+  doc.roundedRect(margin, curY, contentWidth, 42, 2, 2, 'FD')
+
+  doc.setTextColor(15, 23, 42)
+  doc.setFontSize(9)
+
+  // Coluna esquerda
+  doc.setFont('helvetica', 'bold')
+  doc.text('Descrição:', margin + 4, curY + 7)
+  doc.setFont('helvetica', 'normal')
+  const descSafe =
+    req.description.length > 40 ? req.description.slice(0, 38) + '...' : req.description
+  doc.text(descSafe, margin + 24, curY + 7)
+
+  doc.setFont('helvetica', 'bold')
+  doc.text('Categoria:', margin + 4, curY + 14)
+  doc.setFont('helvetica', 'normal')
+  doc.text(req.category || 'Equipamento', margin + 24, curY + 14)
+
+  doc.setFont('helvetica', 'bold')
+  doc.text('Data da Despesa:', margin + 4, curY + 21)
+  doc.setFont('helvetica', 'normal')
+  doc.text(formatDateBR(req.expense_date), margin + 34, curY + 21)
+
+  doc.setFont('helvetica', 'bold')
+  doc.text('Estabelecimento:', margin + 4, curY + 28)
+  doc.setFont('helvetica', 'normal')
+  const merchSafe = (req.merchant_name || 'Não informado').slice(0, 36)
+  doc.text(merchSafe, margin + 34, curY + 28)
+
+  if (req.cnpj) {
+    doc.setFont('helvetica', 'bold')
+    doc.text('CNPJ:', margin + 4, curY + 35)
+    doc.setFont('helvetica', 'normal')
+    doc.text(req.cnpj, margin + 18, curY + 35)
+  }
+
+  // Coluna direita
+  const rightColX = margin + contentWidth / 2 + 2
+  doc.setFont('helvetica', 'bold')
+  doc.text('Solicitante:', rightColX, curY + 7)
+  doc.setFont('helvetica', 'normal')
+  const solName = collaboratorName || req.user_profile?.full_name || 'Colaborador Solicitante'
+  doc.text(solName, rightColX + 22, curY + 7)
+
+  doc.setFont('helvetica', 'bold')
+  doc.text('Comprovante:', rightColX, curY + 14)
+  doc.setFont('helvetica', 'normal')
+  const fnSafe =
+    req.receipt_file_name.length > 28
+      ? req.receipt_file_name.slice(0, 26) + '...'
+      : req.receipt_file_name
+  doc.text(fnSafe || 'Anexo', rightColX + 26, curY + 14)
+
+  doc.setFont('helvetica', 'bold')
+  doc.text('Emissão:', rightColX, curY + 21)
+  doc.setFont('helvetica', 'normal')
+  doc.text(new Date().toLocaleDateString('pt-BR'), rightColX + 20, curY + 21)
+
+  if (req.notes) {
+    doc.setFont('helvetica', 'bold')
+    doc.text('Obs:', rightColX, curY + 28)
+    doc.setFont('helvetica', 'normal')
+    const notesSafe = req.notes.length > 36 ? req.notes.slice(0, 34) + '...' : req.notes
+    doc.text(notesSafe, rightColX + 12, curY + 28)
+  }
+
+  curY += 48
+
+  // Tabela de detalhamento da despesa avulsa
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(9)
+  doc.setTextColor(51, 65, 85)
+  doc.text('DETALHAMENTO DA DESPESA AVULSA AUDITADA', margin, curY)
+  curY += 4
+
+  // Tabela Header
+  doc.setFillColor(241, 245, 249)
+  doc.rect(margin, curY, contentWidth, 7, 'F')
+  doc.setDrawColor(203, 213, 225)
+  doc.line(margin, curY + 7, margin + contentWidth, curY + 7)
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(7.5)
+  doc.setTextColor(71, 85, 105)
+  doc.text('DATA', margin + 3, curY + 4.8)
+  doc.text('CATEGORIA', margin + 26, curY + 4.8)
+  doc.text('DESCRIÇÃO / FORNECEDOR', margin + 65, curY + 4.8)
+  doc.text('VALOR (R$)', margin + contentWidth - 30, curY + 4.8, { align: 'right' })
+  doc.text('STATUS', margin + contentWidth - 4, curY + 4.8, { align: 'right' })
+
+  curY += 7
+
+  // Linha da despesa
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(7.5)
+  doc.setTextColor(15, 23, 42)
+
+  doc.text(formatDateBR(req.expense_date), margin + 3, curY + 4.5)
+  doc.text(req.category || 'Equipamento', margin + 26, curY + 4.5)
+
+  const descFull = req.merchant_name ? `${req.description} (${req.merchant_name})` : req.description
+  const descDisplay = descFull.length > 40 ? descFull.slice(0, 38) + '...' : descFull
+  doc.text(descDisplay, margin + 65, curY + 4.5)
+
+  doc.setFont('helvetica', 'bold')
+  doc.setTextColor(16, 185, 129) // emerald-600
+  doc.text(formatCurrencyBRL(req.amount), margin + contentWidth - 30, curY + 4.5, {
+    align: 'right',
+  })
+
+  doc.setFont('helvetica', 'normal')
+  doc.setTextColor(100, 116, 139)
+  doc.text(statusStr, margin + contentWidth - 4, curY + 4.5, { align: 'right' })
+
+  curY += 10
+
+  // Totalizador sem sobreposição (padrão v0.0.28)
+  doc.setDrawColor(203, 213, 225)
+  doc.line(margin, curY, margin + contentWidth, curY)
+  curY += 7
+
+  const formattedTotal = formatCurrencyBRL(req.amount)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(12)
+  const totalValueWidth = doc.getTextWidth(formattedTotal)
+  const totalValueRightX = margin + contentWidth - 2
+
+  doc.setTextColor(16, 185, 129)
+  doc.text(formattedTotal, totalValueRightX, curY, { align: 'right' })
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(8.5)
+  doc.setTextColor(71, 85, 105)
+  const labelRightX = totalValueRightX - totalValueWidth - 4
+  doc.text('TOTAL REEMBOLSÁVEL:', labelRightX, curY, { align: 'right' })
+
+  // Assinaturas no rodapé da página 1
+  const sigY = Math.max(curY + 30, pageHeight - 34)
+  if (sigY <= pageHeight - 15) {
+    doc.setDrawColor(203, 213, 225)
+    doc.line(margin + 5, sigY, margin + 70, sigY)
+    doc.line(pageWidth - margin - 70, sigY, pageWidth - margin - 5, sigY)
+
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(7)
+    doc.setTextColor(100, 116, 139)
+    doc.text('Assinatura do Solicitante', margin + 37.5, sigY + 4, { align: 'center' })
+    doc.text('Gestor / Auditor Financeiro Responsável', pageWidth - margin - 37.5, sigY + 4, {
+      align: 'center',
+    })
+  }
+
+  // Página 2: Comprovante Rasterizado
+  if (req.receipt_url || req.receipt_file_name) {
+    onProgress?.('Rasterizando comprovante fiscal em alta resolução...')
+    let att: PreparedReceiptAttachment
+    try {
+      att = await prepareReceiptAttachment({
+        id: req.id,
+        file_url: req.receipt_url,
+        file_name: req.receipt_file_name,
+        merchant_name: req.merchant_name || req.description,
+        issue_date: req.expense_date,
+        amount: req.amount,
+        category: req.category,
+      })
+    } catch (err: any) {
+      att = {
+        expenseId: req.id,
+        fileName: req.receipt_file_name,
+        merchantName: req.merchant_name || req.description,
+        issueDate: req.expense_date,
+        amount: req.amount,
+        category: req.category,
+        status: 'error',
+        errorMessage: err?.message || 'Falha ao processar arquivo.',
+        pages: [],
+      }
+    }
+
+    if (att.status === 'error' || att.pages.length === 0) {
+      doc.addPage()
+      doc.setFillColor(254, 242, 242)
+      doc.rect(margin, margin, contentWidth, 24, 'F')
+      doc.setDrawColor(239, 68, 68)
+      doc.rect(margin, margin, contentWidth, 24, 'D')
+
+      doc.setFont('helvetica', 'bold')
+      doc.setTextColor(185, 28, 28)
+      doc.setFontSize(10)
+      doc.text(`Anexo — ${att.fileName}`, margin + 6, margin + 8)
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(8)
+      doc.text(
+        `${att.merchantName} • ${formatDateBR(att.issueDate)} • ${formatCurrencyBRL(att.amount)}`,
+        margin + 6,
+        margin + 14,
+      )
+      doc.setTextColor(153, 27, 27)
+      doc.text(
+        `Comprovante não disponível no momento: ${att.errorMessage || 'Arquivo inacessível.'}`,
+        margin + 6,
+        margin + 20,
+      )
+    } else {
+      for (let pIdx = 0; pIdx < att.pages.length; pIdx++) {
+        const page = att.pages[pIdx]
+        doc.addPage()
+
+        doc.setFillColor(241, 245, 249)
+        doc.rect(margin, margin, contentWidth, 16, 'F')
+        doc.setDrawColor(203, 213, 225)
+        doc.rect(margin, margin, contentWidth, 16, 'D')
+
+        doc.setFont('helvetica', 'bold')
+        doc.setFontSize(9.5)
+        doc.setTextColor(30, 64, 175)
+        const pageInfo = att.pages.length > 1 ? ` (Pág ${pIdx + 1}/${att.pages.length})` : ''
+        doc.text(`Comprovante Anexo: ${att.fileName}${pageInfo}`, margin + 5, margin + 6.5)
+
+        doc.setFont('helvetica', 'normal')
+        doc.setFontSize(8)
+        doc.setTextColor(71, 85, 105)
+        doc.text(
+          `${att.merchantName} • Data: ${formatDateBR(att.issueDate)} • Valor: ${formatCurrencyBRL(att.amount)}`,
+          margin + 5,
+          margin + 12,
+        )
+
+        doc.setFillColor(219, 234, 254)
+        doc.roundedRect(pageWidth - margin - 38, margin + 3.5, 34, 8.5, 2, 2, 'F')
+        doc.setFont('helvetica', 'bold')
+        doc.setFontSize(7)
+        doc.setTextColor(30, 64, 175)
+        doc.text('AUDITADO OCR', pageWidth - margin - 21, margin + 8.5, { align: 'center' })
+
+        const availWidth = contentWidth
+        const availHeight = pageHeight - margin * 2 - 28
+        const imgAspect = page.width / page.height
+
+        let renderW = availWidth
+        let renderH = renderW / imgAspect
+        if (renderH > availHeight) {
+          renderH = availHeight
+          renderW = renderH * imgAspect
+        }
+
+        const imgX = margin + (availWidth - renderW) / 2
+        const imgY = margin + 20
+
+        doc.setFillColor(255, 255, 255)
+        doc.setDrawColor(203, 213, 225)
+        doc.roundedRect(imgX - 1.5, imgY - 1.5, renderW + 3, renderH + 3, 1, 1, 'FD')
+
+        try {
+          doc.addImage(page.dataUrl, 'JPEG', imgX, imgY, renderW, renderH, undefined, 'FAST')
+        } catch (addImgErr) {
+          console.warn('Erro ao inserir imagem no jsPDF:', addImgErr)
+        }
+
+        doc.setFont('helvetica', 'normal')
+        doc.setFontSize(7)
+        doc.setTextColor(148, 163, 184)
+        doc.text(
+          'Comprovante digitalizado e auditado pelo motor de compliance Reembolso.ai Corporativo',
+          pageWidth / 2,
+          pageHeight - 6,
+          { align: 'center' },
+        )
+      }
+    }
+  }
+
+  const safeDescSlug = req.description
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '_')
+    .slice(0, 30)
+  const rawFilename = `solicitacao_avulsa_${safeDescSlug}_${req.expense_date}.pdf`
+  const blob = doc.output('blob')
+  return { blob, filename: rawFilename }
+}
+
+/**
+ * Abre o relatório PDF consolidado de uma solicitação avulsa em nova aba para impressão / download
+ */
+export async function exportStandaloneRequestPdf(
+  req: StandaloneRequest,
+  collaboratorName?: string,
+  onProgress?: (message: string) => void,
+): Promise<void> {
+  const printWindow = window.open('', '_blank')
+  if (printWindow) {
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8">
+          <title>Gerando Solicitação de Reembolso...</title>
+          <style>
+            body { font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #f8fafc; color: #334155; }
+            .box { text-align: center; background: white; padding: 32px 48px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+            .spinner { border: 4px solid #e2e8f0; border-top: 4px solid #1e40af; border-radius: 50%; width: 36px; height: 36px; animation: spin 1s linear infinite; margin: 0 auto 16px auto; }
+            @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+          </style>
+        </head>
+        <body>
+          <div class="box">
+            <div class="spinner"></div>
+            <h3 style="margin: 0 0 8px 0; font-size: 18px; color: #0f172a;">Preparando Solicitação Avulsa</h3>
+            <p id="progress-text" style="margin: 0; font-size: 13px; color: #64748b;">Processando comprovante e gerando PDF consolidado...</p>
+          </div>
+        </body>
+      </html>
+    `)
+  }
+
+  try {
+    const { blob } = await generateStandaloneReportBlob(req, collaboratorName, (msg) => {
+      onProgress?.(msg)
+      if (printWindow && !printWindow.closed) {
+        try {
+          const el = printWindow.document.getElementById('progress-text')
+          if (el) el.textContent = msg
+        } catch {
+          // ignore
+        }
+      }
+    })
+
+    const pdfUrl = URL.createObjectURL(blob)
+    if (printWindow && !printWindow.closed) {
+      printWindow.location.href = pdfUrl
+    } else {
+      const a = document.createElement('a')
+      a.href = pdfUrl
+      const safeDescSlug = req.description
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '_')
+        .slice(0, 30)
+      a.download = `solicitacao_avulsa_${safeDescSlug}_${req.expense_date}.pdf`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+    }
+  } catch (err: any) {
+    if (printWindow && !printWindow.closed) {
+      printWindow.close()
+    }
+    throw err
+  }
 }

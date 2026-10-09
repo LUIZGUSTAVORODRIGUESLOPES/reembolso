@@ -4,6 +4,9 @@ import { userService } from '@/services/userService'
 import { Expense, Trip, Profile } from '@/types/database'
 import { formatCurrencyBRL } from '@/lib/formatters'
 
+import { StandaloneRequest } from '@/types/database'
+import { standaloneRequestService } from '@/services/standaloneRequestService'
+
 export type LastDeletedItem =
   | {
       type: 'expense'
@@ -14,6 +17,10 @@ export type LastDeletedItem =
       type: 'trip'
       data: Trip
       expenses: Expense[]
+    }
+  | {
+      type: 'standalone_request'
+      data: StandaloneRequest
     }
   | {
       type: 'user_deactivation'
@@ -204,6 +211,54 @@ export function showUserStatusUndoToast(options: {
           })
           if (onRestoreFailedSafe(onRevertFailed, err)) {
             // handled
+          }
+        }
+      },
+    },
+  })
+}
+
+/**
+ * Notifica exclusão de solicitação avulsa com botão "Desfazer" interativo por 10 segundos.
+ */
+export function showStandaloneRequestDeletedUndoToast(options: {
+  request: StandaloneRequest
+  onRestored?: (restored: StandaloneRequest) => void
+  onRestoreFailed?: (err: any) => void
+}) {
+  const { request, onRestored, onRestoreFailed } = options
+  undoManager.registerAction({
+    type: 'standalone_request',
+    data: request,
+  })
+
+  const title = `Solicitação "${request.description}" excluída`
+  const desc = `${formatCurrencyBRL(request.amount)} • Categoria: ${request.category}. Você tem 10 segundos para desfazer.`
+
+  sonnerToast.warning(title, {
+    description: desc,
+    duration: 10000,
+    action: {
+      label: 'Desfazer',
+      onClick: async () => {
+        try {
+          const restored = await standaloneRequestService.restoreRequest(request)
+          undoManager.clearLastAction()
+          sonnerToast.success('Solicitação restaurada!', {
+            description: `A solicitação "${restored.description}" foi recuperada com sucesso.`,
+            duration: 5000,
+          })
+          if (onRestored) {
+            onRestored(restored)
+          }
+        } catch (err: any) {
+          console.error('Falha ao restaurar solicitação avulsa:', err)
+          sonnerToast.error('Não foi possível restaurar a solicitação', {
+            description: err?.message || 'Erro inesperado ao restaurar registro.',
+            duration: 6000,
+          })
+          if (onRestoreFailed) {
+            onRestoreFailed(err)
           }
         }
       },

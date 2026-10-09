@@ -55,6 +55,7 @@ export function SettleTripModal({
   currentTrip,
   onSuccess,
   user,
+  expenses,
 }: SettleTripModalProps) {
   const { toast } = useToast()
 
@@ -91,7 +92,7 @@ export function SettleTripModal({
   >(expenses || [])
   const [loadingCurrentExpenses, setLoadingCurrentExpenses] = useState(false)
 
-  // Recarregar despesas quando o modal abrir
+  // Recarregar despesas quando o modal abrir ou props expenses mudarem
   useEffect(() => {
     if (open) {
       if (expenses && expenses.length > 0) {
@@ -107,7 +108,7 @@ export function SettleTripModal({
           .finally(() => setLoadingCurrentExpenses(false))
       }
     }
-  }, [open, currentTrip.id])
+  }, [open, currentTrip.id, expenses])
 
   // Gatekeeping: Checagem se a viagem atual possui recibos pendentes
   const currentTripHasPending = useMemo(() => {

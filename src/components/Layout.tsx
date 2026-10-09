@@ -99,6 +99,7 @@ export default function Layout() {
     if (path === '/') return ['Dashboard']
     if (path === '/trips') return ['Dashboard', 'Viagens']
     if (path.startsWith('/trips/')) return ['Dashboard', 'Viagens', 'Detalhes & Auditoria']
+    if (path === '/avulsas') return ['Dashboard', 'Solicitações Avulsas']
     if (path === '/upload') return ['Dashboard', 'Upload em Lote']
     if (path === '/triage') return ['Dashboard', 'Triagem & OCR']
     if (path === '/reports') return ['Dashboard', 'Relatórios']
@@ -111,6 +112,7 @@ export default function Layout() {
     if (path === '/') return 'Dashboard Corporativo'
     if (path === '/trips') return 'Gestão de Viagens'
     if (path.startsWith('/trips/')) return 'Auditoria & Despesas da Viagem'
+    if (path === '/avulsas') return 'Solicitações Avulsas de Reembolso'
     if (path === '/upload') return 'Upload em Lote com OCR'
     if (path === '/triage') return 'Triagem & Conferência'
     if (path === '/reports') return 'Prestação de Contas & Relatórios'

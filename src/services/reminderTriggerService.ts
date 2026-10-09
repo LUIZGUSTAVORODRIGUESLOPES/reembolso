@@ -18,11 +18,30 @@ export interface ReminderCheckResult {
   evaluatedTripsCount?: number
   evaluatedCount?: number
   dueRemindersCount?: number
+  firstReminderCount?: number
+  recurringReminderCount?: number
   remindersSent?: number
   dryRun?: boolean
+  dueReminders?: Array<{
+    tripId: string
+    destination: string
+    status?: string
+    endDate: string
+    daysElapsed: number
+    configuredDays: number
+    repeatIntervalDays?: number
+    isRecurrence?: boolean
+    sequenceNumber?: number
+    lastSentAt?: string | null
+    daysSinceLastReminder?: number | null
+    recipientEmail: string
+    recipientName: string
+  }>
   results?: Array<{
     tripId: string
     recipientEmail: string
+    isRecurrence?: boolean
+    sequenceNumber?: number
     success: boolean
     error?: string
   }>

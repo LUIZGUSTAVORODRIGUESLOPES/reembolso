@@ -52,6 +52,7 @@ export const userService = {
       updated_at: p.updated_at,
       alert_unsent_trip_enabled: p.alert_unsent_trip_enabled ?? true,
       alert_unsent_trip_days: p.alert_unsent_trip_days ?? 5,
+      alert_unsent_trip_repeat_days: p.alert_unsent_trip_repeat_days ?? 7,
       // If user is admin and orphan trips exist, they manage those trips too
       trips_count: (countMap[p.id] || 0) + (p.role === 'admin' ? orphanTripsCount : 0),
     }))
@@ -68,6 +69,7 @@ export const userService = {
       full_name?: string
       alert_unsent_trip_enabled?: boolean
       alert_unsent_trip_days?: number
+      alert_unsent_trip_repeat_days?: number
     },
   ): Promise<Profile> {
     const payload: Record<string, unknown> = {
@@ -97,6 +99,7 @@ export const userService = {
       updated_at: data.updated_at,
       alert_unsent_trip_enabled: data.alert_unsent_trip_enabled ?? true,
       alert_unsent_trip_days: data.alert_unsent_trip_days ?? 5,
+      alert_unsent_trip_repeat_days: data.alert_unsent_trip_repeat_days ?? 7,
     }
   },
 
@@ -157,6 +160,7 @@ export const userService = {
         updated_at: p.updated_at,
         alert_unsent_trip_enabled: p.alert_unsent_trip_enabled ?? true,
         alert_unsent_trip_days: p.alert_unsent_trip_days ?? 5,
+        alert_unsent_trip_repeat_days: p.alert_unsent_trip_repeat_days ?? 7,
       }
     }
     return map

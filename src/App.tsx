@@ -13,6 +13,7 @@ import TriagePage from './pages/TriagePage'
 import TripDetailPage from './pages/TripDetailPage'
 import ReportsPage from './pages/ReportsPage'
 import TripsPage from './pages/TripsPage'
+import SolicitacoesAvulsasPage from './pages/SolicitacoesAvulsasPage'
 import LoginPage from './pages/LoginPage'
 import UsersPage from './pages/UsersPage'
 
@@ -36,7 +37,7 @@ const App = () => (
             <Route path="/trips" element={<TripsPage />} />
             <Route path="/trips/:id" element={<TripDetailPage />} />
             <Route path="/avulsas" element={<SolicitacoesAvulsasPage />} />
-            <Route path="/upload" element={<UploadPage />} />{' '}
+            <Route path="/upload" element={<UploadPage />} />
             <Route path="/triage" element={<TriagePage />} />
             <Route path="/reports" element={<ReportsPage />} />
             <Route

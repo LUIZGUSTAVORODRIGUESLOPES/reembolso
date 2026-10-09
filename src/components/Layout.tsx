@@ -3,6 +3,7 @@ import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard,
   PlaneTakeoff,
+  PackageOpen,
   UploadCloud,
   FileCheck2,
   FileSpreadsheet,
@@ -65,6 +66,7 @@ export default function Layout() {
   const navItems = [
     { path: '/', label: 'Dashboard', icon: LayoutDashboard },
     { path: '/trips', label: 'Viagens', icon: PlaneTakeoff },
+    { path: '/avulsas', label: 'Solicitações Avulsas', icon: PackageOpen },
     { path: '/upload', label: 'Upload de Comprovantes', icon: UploadCloud },
     { path: '/triage', label: 'Triagem & OCR', icon: FileCheck2 },
     { path: '/reports', label: 'Relatórios & Prestação', icon: FileSpreadsheet },

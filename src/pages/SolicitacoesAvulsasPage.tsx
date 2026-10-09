@@ -1596,15 +1596,51 @@ export default function SolicitacoesAvulsasPage() {
       </AlertDialog>
 
       {/* Visualizador de Comprovante */}
-      {viewerDoc && (
-        <DocumentViewer
-          open={viewerOpen}
-          onOpenChange={setViewerOpen}
-          documentUrl={viewerDoc.url}
-          fileName={viewerDoc.fileName}
-          title={viewerDoc.title}
-        />
-      )}
+      <Dialog open={viewerOpen} onOpenChange={setViewerOpen}>
+        <DialogContent className="sm:max-w-[800px] max-h-[92vh] overflow-hidden flex flex-col p-0">
+          <DialogHeader className="p-4 border-b border-slate-100 flex-row items-center justify-between space-y-0">
+            <div>
+              <DialogTitle className="text-sm font-bold text-slate-900 truncate max-w-md">
+                {viewerDoc?.title || viewerDoc?.fileName || 'Visualizar Comprovante'}
+              </DialogTitle>
+              <DialogDescription className="text-[11px] text-slate-500 truncate max-w-md">
+                {viewerDoc?.fileName}
+              </DialogDescription>
+            </div>
+            {viewerDoc?.url && (
+              <a
+                href={viewerDoc.url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 font-medium pr-6"
+              >
+                Abrir original
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            )}
+          </DialogHeader>
+
+          <div className="flex-1 bg-slate-900/5 p-4 overflow-auto flex items-center justify-center min-h-[450px]">
+            {viewerDoc?.url?.toLowerCase().endsWith('.pdf') ? (
+              <iframe
+                src={viewerDoc.url}
+                title="Comprovante PDF"
+                className="w-full h-[65vh] rounded-lg border border-slate-200 bg-white"
+              />
+            ) : viewerDoc?.url ? (
+              <img
+                src={viewerDoc.url}
+                alt="Comprovante"
+                className="max-w-full max-h-[70vh] object-contain rounded-lg shadow-sm border border-slate-200 bg-white"
+              />
+            ) : (
+              <div className="text-center p-8 text-xs text-slate-500">
+                Documento não encontrado ou indisponível.
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

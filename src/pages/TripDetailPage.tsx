@@ -171,6 +171,9 @@ export default function TripDetailPage() {
   const [editExpAmount, setEditExpAmount] = useState('')
   const [editExpCategory, setEditExpCategory] = useState<ExpenseCategory>('alimentacao')
   const [editExpCnpj, setEditExpCnpj] = useState('')
+  const [editExpTripId, setEditExpTripId] = useState<string>('')
+  const [userTrips, setUserTrips] = useState<Trip[]>([])
+  const [loadingUserTrips, setLoadingUserTrips] = useState(false)
 
   const loadTripData = async () => {
     if (!id) return
@@ -440,6 +443,18 @@ export default function TripDetailPage() {
     }
   }
 
+  const loadAvailableTrips = async () => {
+    setLoadingUserTrips(true)
+    try {
+      const list = await storageService.listTrips()
+      setUserTrips(list)
+    } catch (err) {
+      console.error('Falha ao listar viagens para seleção:', err)
+    } finally {
+      setLoadingUserTrips(false)
+    }
+  }
+
   const handleOpenEditExpense = (exp: Expense) => {
     if (storageService.isTripLocked(trip?.status)) {
       toast({
@@ -456,6 +471,8 @@ export default function TripDetailPage() {
     setEditExpAmount(String(exp.amount))
     setEditExpCategory(exp.category)
     setEditExpCnpj(exp.cnpj || '')
+    setEditExpTripId(exp.trip_id || trip?.id || '')
+    loadAvailableTrips()
   }
 
   const handleSaveExpenseEdits = async (e: React.FormEvent) => {
@@ -482,6 +499,21 @@ export default function TripDetailPage() {
       return
     }
 
+    const targetTripId = editExpTripId || trip.id
+    const targetTrip =
+      userTrips.find((t) => t.id === targetTripId) || (targetTripId === trip.id ? trip : null)
+    if (targetTrip && storageService.isTripLocked(targetTrip.status)) {
+      toast({
+        title: 'Viagem de destino bloqueada',
+        description:
+          'Não é possível vincular despesas a uma viagem com status auditada, fechada ou reembolsada.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    const isMovingTrip = targetTripId !== trip.id
+
     setIsUpdatingExpense(true)
     try {
       await storageService.updateExpense(editingExpense.id, {
@@ -490,11 +522,21 @@ export default function TripDetailPage() {
         amount: parsed,
         category: editExpCategory,
         cnpj: editExpCnpj.trim() || null,
+        trip_id: targetTripId,
       })
-      toast({
-        title: 'Despesa atualizada',
-        description: 'Os dados do comprovante foram salvos com sucesso.',
-      })
+
+      if (isMovingTrip) {
+        const destName = targetTrip?.destination || 'outra viagem'
+        toast({
+          title: 'Despesa movida com sucesso!',
+          description: `O comprovante foi transferido para a viagem "${destName}". A listagem atual foi atualizada.`,
+        })
+      } else {
+        toast({
+          title: 'Despesa atualizada',
+          description: 'Os dados do comprovante foram salvos com sucesso.',
+        })
+      }
       setEditingExpense(null)
       loadTripData()
     } catch (err: any) {
@@ -1730,6 +1772,66 @@ export default function TripDetailPage() {
                 className="text-xs"
                 disabled={isUpdatingExpense}
               />
+            </div>
+
+            {/* Seleção de Viagem Vinculada */}
+            <div className="space-y-1 pt-1 border-t border-slate-100">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                  <Plane className="w-3.5 h-3.5 text-blue-600" />
+                  Viagem Vinculada *
+                </Label>
+                {editExpTripId && editExpTripId !== trip.id && (
+                  <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                    Será movida para outra viagem
+                  </span>
+                )}
+              </div>
+              <Select
+                value={editExpTripId || trip.id}
+                onValueChange={setEditExpTripId}
+                disabled={isUpdatingExpense || loadingUserTrips}
+              >
+                <SelectTrigger className="text-xs">
+                  <SelectValue
+                    placeholder={
+                      loadingUserTrips ? 'Carregando viagens...' : 'Selecione a viagem vinculada'
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {/* Se a lista de userTrips ainda não tem a própria viagem atual, garante que ela apareça */}
+                  {(userTrips.length > 0 ? userTrips : [trip]).map((tr) => {
+                    const locked = storageService.isTripLocked(tr.status)
+                    const isCurrent = tr.id === trip.id
+                    return (
+                      <SelectItem
+                        key={tr.id}
+                        value={tr.id}
+                        disabled={locked && !isCurrent}
+                        className="text-xs"
+                      >
+                        <div className="flex items-center justify-between gap-2 w-full">
+                          <span>
+                            {tr.destination} ({formatDateBR(tr.start_date)})
+                            {isCurrent ? ' (Atual)' : ''}
+                          </span>
+                          {locked && (
+                            <span className="text-[10px] text-slate-400 font-normal">
+                              🔒 Bloqueada ({TRIP_STATUS_CONFIG[tr.status]?.label || tr.status})
+                            </span>
+                          )}
+                        </div>
+                      </SelectItem>
+                    )
+                  })}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-slate-400">
+                Caso este comprovante tenha sido lançado na viagem errada, escolha a viagem correta
+                para movê-lo. Viagens auditadas, fechadas ou reembolsadas não podem receber
+                despesas.
+              </p>
             </div>
 
             <DialogFooter className="pt-3 gap-2">

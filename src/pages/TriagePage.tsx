@@ -588,13 +588,23 @@ export default function TriagePage() {
                     <SelectValue placeholder="Selecione a viagem" />
                   </SelectTrigger>
                   <SelectContent>
-                    {trips.map((tr) => (
-                      <SelectItem key={tr.id} value={tr.id}>
-                        {tr.destination} ({formatDateBR(tr.start_date)})
-                      </SelectItem>
-                    ))}
+                    {trips.map((tr) => {
+                      const locked = storageService.isTripLocked(tr.status)
+                      return (
+                        <SelectItem key={tr.id} value={tr.id} disabled={locked}>
+                          {tr.destination} ({formatDateBR(tr.start_date)})
+                          {locked ? ' 🔒 (Bloqueada)' : ''}
+                        </SelectItem>
+                      )
+                    })}
                   </SelectContent>
                 </Select>
+                {isAssignedTripLocked && (
+                  <p className="text-[11px] text-amber-700 bg-amber-50 p-1.5 rounded border border-amber-200">
+                    ⚠️ A viagem selecionada está com status bloqueado para adição/edição de
+                    despesas. Selecione outra viagem aberta.
+                  </p>
+                )}
               </div>
 
               {/* Action Buttons Row */}

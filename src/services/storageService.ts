@@ -767,6 +767,11 @@ class SupabaseStorageService {
       }
     }
 
+    // O OK manual é a conferência humana definitiva do lançamento: além de gravar
+    // quem/quando, marca o comprovante como verificado (is_verified) para que o
+    // estado real do banco nunca exiba "conforme" para um recibo nunca triado.
+    // Ao desfazer, apenas o OK é revertido (audit_status volta a "pendente") —
+    // is_verified permanece intacto, preservando o histórico da triagem.
     const updates: Partial<Expense> = checked
       ? {
           audit_manual_checked: true,
@@ -774,6 +779,7 @@ class SupabaseStorageService {
           audit_manual_checked_by_id: user.id,
           audit_manual_checked_by_name: user.name,
           audit_status: 'conforme',
+          is_verified: true,
         }
       : {
           audit_manual_checked: false,
@@ -1341,6 +1347,15 @@ class SupabaseStorageService {
       settled_by_name: row.settled_by_name || null,
       settled_at: row.settled_at || null,
     }
+  }
+
+  /**
+   * Converte uma linha crua da tabela `expenses` (ex.: payload do Supabase
+   * Realtime) no formato Expense da aplicação. Público para que as telas
+   * sincronizem atualizações em tempo real com o mesmo mapeamento das consultas.
+   */
+  public mapExpenseRowPublic(row: any): Expense {
+    return this.mapExpenseRow(row)
   }
 
   private mapExpenseRow(row: any): Expense {

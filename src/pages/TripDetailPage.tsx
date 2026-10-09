@@ -97,6 +97,7 @@ import { useToast } from '@/hooks/use-toast'
 import { showExpenseDeletedUndoToast, showTripDeletedUndoToast } from '@/services/undoService'
 import { useAuth } from '@/hooks/use-auth'
 import { SettleTripModal } from '@/components/SettleTripModal'
+import { supabase } from '@/lib/supabase/client'
 
 export default function TripDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -167,8 +168,12 @@ export default function TripDetailPage() {
     setSelectedReceiptFile(file)
   }
 
-  // Expense Preview Modal
-  const [viewingExpense, setViewingExpense] = useState<Expense | null>(null)
+  // Expense Preview Modal: guarda apenas o ID do lançamento aberto. O objeto
+  // exibido é SEMPRE derivado da lista `expenses` (fonte da verdade vinda do
+  // banco), para que o modal reaja em tempo real ao OK/desfazer da conferência.
+  const [viewingExpenseId, setViewingExpense] = useState<string | null>(null)
+  const viewingExpense =
+    (viewingExpenseId ? expenses.find((e) => e.id === viewingExpenseId) : null) ?? null
 
   // Settle Trip Modal
   const [settleModalOpen, setSettleModalOpen] = useState(false)
@@ -242,6 +247,8 @@ export default function TripDetailPage() {
       const rules = await storageService.evaluateTripAudit(id)
 
       setTrip(t)
+      // Fonte da verdade do contador de conferência: SEMPRE a lista real de
+      // lançamentos lida do banco (com o audit_manual_checked de cada um).
       setExpenses(expList)
       setAuditRules(rules)
 
@@ -252,6 +259,9 @@ export default function TripDetailPage() {
       setNewExpDate(t.start_date)
     } catch (err: any) {
       console.error('Falha ao carregar detalhes da viagem:', err)
+      // Sem estado órfão: se a carga falhar, a lista zera para nunca exibir
+      // contagem de conferência restante de um carregamento anterior.
+      setExpenses([])
       toast({
         title: 'Erro ao carregar viagem',
         description: `Não foi possível carregar os detalhes: ${err?.message || 'erro de conexão'}`,
@@ -291,10 +301,9 @@ export default function TripDetailPage() {
       })
 
       if (updated) {
+        // Atualiza a fonte da verdade (lista carregada do banco); o contador de
+        // conferência e o modal de visualização derivam dela em tempo real.
         setExpenses((prev) => prev.map((e) => (e.id === exp.id ? updated : e)))
-        if (viewingExpense && viewingExpense.id === exp.id) {
-          setViewingExpense(updated)
-        }
       }
 
       toast({
@@ -322,6 +331,35 @@ export default function TripDetailPage() {
     }
     loadTripData()
   }, [authLoading, user?.id, id])
+
+  // Sincronização em tempo real (Supabase Realtime): qualquer UPDATE na tabela
+  // de lançamentos desta viagem — inclusive o OK/desfazer da conferência manual,
+  // feito nesta tela ou por outro usuário — é refletido no contador sem
+  // recarregar a página, sempre a partir do estado real persistido no banco.
+  useEffect(() => {
+    if (!id || !user) return
+
+    const channel = supabase
+      .channel(`trip-expenses-${id}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'expenses', filter: `trip_id=eq.${id}` },
+        (payload) => {
+          const row = payload.new as { id?: string } | null
+          if (!row?.id) return
+          const rowId = String(row.id)
+          setExpenses((prev) => {
+            if (!prev.some((e) => e.id === rowId)) return prev
+            return prev.map((e) => (e.id === rowId ? storageService.mapExpenseRowPublic(row) : e))
+          })
+        },
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [id, user?.id])
 
   const handleOpenJustify = (rule: AuditEvaluationRule) => {
     setJustifyingRule(rule)
@@ -954,11 +992,12 @@ export default function TripDetailPage() {
   const isTripLocked = storageService.isTripLocked(effectiveStatus)
 
   // Manual Audit Progress (conferência humana de cada lançamento)
-  // O contador reflete EXCLUSIVAMENTE o OK manual persistido no banco
-  // (expenses.audit_manual_checked). Lançamentos marcados "conforme" apenas
-  // pelo motor de regras (audit_status === 'conforme' sem OK humano — ex.
-  // inclusão manual ou validação automática) NÃO entram no X: eles seguem
-  // exigindo conferência manual e continuam contando no total Y.
+  // O contador é derivado EXCLUSIVAMENTE do estado real dos lançamentos
+  // carregados do banco (expenses.audit_manual_checked) — nunca de cache,
+  // de total de recibos anexados ou do audit_status do motor. Lançamentos
+  // "conforme" apenas pelo motor (sem OK humano) continuam no total Y fora
+  // do X, e qualquer marcação/desmarcação atualiza `expenses`, que reage
+  // no contador imediatamente, sem recarregar a página.
   const totalExpenses = expenses.length
   const checkedExpensesCount = expenses.filter((e) => Boolean(e.audit_manual_checked)).length
   const engineConformePendingCount = expenses.filter(
@@ -1692,7 +1731,7 @@ export default function TripDetailPage() {
                     <tr
                       key={exp.id}
                       className="hover:bg-slate-50 transition-colors cursor-pointer group"
-                      onClick={() => setViewingExpense(exp)}
+                      onClick={() => setViewingExpense(exp.id)}
                     >
                       <td className="py-3.5 px-4 font-medium text-slate-800">
                         {formatDateBR(exp.issue_date)}
@@ -1834,7 +1873,7 @@ export default function TripDetailPage() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => setViewingExpense(exp)}
+                            onClick={() => setViewingExpense(exp.id)}
                             className="h-7 w-7 p-0 text-slate-500 hover:text-blue-600"
                             title="Visualizar Comprovante"
                           >

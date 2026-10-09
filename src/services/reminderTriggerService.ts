@@ -10,11 +10,60 @@ export const REMINDER_LAST_CHECK_KEY = 'lastReminderCheck'
  */
 export const REMINDER_COOLDOWN_MS = 20 * 60 * 60 * 1000
 
+export interface DueReminderItem {
+  tripId: string
+  destination: string
+  status?: string
+  endDate: string
+  daysElapsed: number
+  daysOverdue?: number
+  configuredDays: number
+  repeatIntervalDays?: number
+  isRecurrence?: boolean
+  sequenceNumber?: number
+  lastSentAt?: string | null
+  daysSinceLastReminder?: number | null
+  recipientEmail: string
+  recipientName: string
+}
+
+export interface AwaitingNextCycleItem {
+  tripId: string
+  destination: string
+  status: string
+  endDate: string
+  daysElapsed: number
+  daysOverdue: number
+  configuredDays: number
+  repeatIntervalDays: number
+  remindersSentCount: number
+  lastReminderAt: string
+  daysSinceLastReminder: number
+  nextReminderInDays: number
+  nextReminderDate: string
+  recipientEmail: string
+  recipientName: string
+}
+
+export interface NotYetDueItem {
+  tripId: string
+  destination: string
+  status: string
+  endDate: string
+  daysElapsed: number
+  configuredDays: number
+  daysUntilDue: number
+  dueDate: string
+  recipientEmail: string
+  recipientName: string
+}
+
 export interface ReminderCheckResult {
   success: boolean
   configured?: boolean
   error?: string
   message?: string
+  tripsAssessed?: number
   evaluatedTripsCount?: number
   evaluatedCount?: number
   dueRemindersCount?: number
@@ -22,21 +71,12 @@ export interface ReminderCheckResult {
   recurringReminderCount?: number
   remindersSent?: number
   dryRun?: boolean
-  dueReminders?: Array<{
-    tripId: string
-    destination: string
-    status?: string
-    endDate: string
-    daysElapsed: number
-    configuredDays: number
-    repeatIntervalDays?: number
-    isRecurrence?: boolean
-    sequenceNumber?: number
-    lastSentAt?: string | null
-    daysSinceLastReminder?: number | null
-    recipientEmail: string
-    recipientName: string
-  }>
+  dueNow?: DueReminderItem[]
+  dueReminders?: DueReminderItem[]
+  awaitingNextCycle?: AwaitingNextCycleItem[]
+  awaitingNextCycleCount?: number
+  notYetDue?: NotYetDueItem[]
+  notYetDueCount?: number
   results?: Array<{
     tripId: string
     recipientEmail: string

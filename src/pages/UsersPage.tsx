@@ -19,10 +19,14 @@ import {
   Info,
   Clock,
   Sparkles,
+  Calendar,
+  AlertTriangle,
+  History,
+  Check,
 } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import { userService } from '@/services/userService'
-import { reminderTriggerService } from '@/services/reminderTriggerService'
+import { reminderTriggerService, ReminderCheckResult } from '@/services/reminderTriggerService'
 import { Profile, UserRole } from '@/types/database'
 import { useAuth } from '@/hooks/use-auth'
 import { useToast } from '@/hooks/use-toast'
@@ -90,6 +94,9 @@ export default function UsersPage() {
   const [savingAlertConfig, setSavingAlertConfig] = useState(false)
   const [testingAlerts, setTestingAlerts] = useState(false)
   const [executingRealAlerts, setExecutingRealAlerts] = useState(false)
+
+  // Modal para exibir o resultado detalhado da simulação (dry-run)
+  const [simulationResult, setSimulationResult] = useState<ReminderCheckResult | null>(null)
 
   const loadUsers = async () => {
     try {
@@ -316,21 +323,41 @@ export default function UsersPage() {
   const handleTriggerTestReminder = async () => {
     try {
       setTestingAlerts(true)
-      const res = await userService.triggerReminderCheck({ dryRun: true })
-      const dueCount = res?.dueRemindersCount ?? res?.dueReminders?.length ?? 0
-      const evaluated = res?.evaluatedCount ?? res?.evaluatedTripsCount ?? 0
-      const firstCount = res?.firstReminderCount ?? 0
-      const recurringCount = res?.recurringReminderCount ?? 0
+      const res = (await userService.triggerReminderCheck({
+        dryRun: true,
+      })) as ReminderCheckResult
 
-      if (dueCount === 0) {
+      // Armazena resultado completo para exibição no modal explicativo
+      setSimulationResult(res)
+
+      const dueCount =
+        res?.dueRemindersCount ?? res?.dueNow?.length ?? res?.dueReminders?.length ?? 0
+      const awaitingCount = res?.awaitingNextCycleCount ?? res?.awaitingNextCycle?.length ?? 0
+      const notYetCount = res?.notYetDueCount ?? res?.notYetDue?.length ?? 0
+
+      if (dueCount > 0) {
+        toast({
+          title: 'Checagem simulada (Dry-Run)',
+          description:
+            res.message ||
+            `${dueCount} viagem(ns) com alerta devido agora. Detalhes disponíveis na tela.`,
+        })
+      } else if (awaitingCount > 0) {
         toast({
           title: 'Simulação concluída',
-          description: `Nenhuma viagem pendente atingiu a janela de alerta (${evaluated} viagem(ns) avaliada(s)).`,
+          description:
+            res.message ||
+            `${awaitingCount} viagem(ns) em atraso — todas já notificadas e aguardando próximo ciclo.`,
+        })
+      } else if (notYetCount > 0) {
+        toast({
+          title: 'Simulação concluída',
+          description: `Todas as ${notYetCount} viagem(ns) pendentes ainda estão dentro do prazo configurado.`,
         })
       } else {
         toast({
-          title: 'Checagem simulada (Dry-Run)',
-          description: `${dueCount} lembrete(s) devido(s) de ${evaluated} viagem(ns) avaliada(s): ${firstCount} no 1º alerta e ${recurringCount} na janela de reenvio periódico. Nenhum e-mail foi enviado.`,
+          title: 'Simulação concluída',
+          description: res.message || 'Nenhuma viagem pendente avaliada.',
         })
       }
     } catch (err: any) {
@@ -347,13 +374,16 @@ export default function UsersPage() {
   const handleExecuteRealReminderCheck = async () => {
     try {
       setExecutingRealAlerts(true)
-      const res = await userService.triggerReminderCheck({ dryRun: false })
+      const res = (await userService.triggerReminderCheck({
+        dryRun: false,
+      })) as ReminderCheckResult
 
       // Atualiza timestamp local de checagem
       reminderTriggerService.recordCheckTimestamp()
 
       const sentCount = res?.remindersSent ?? 0
-      const dueCount = res?.dueRemindersCount ?? 0
+      const awaitingCount = res?.awaitingNextCycleCount ?? res?.awaitingNextCycle?.length ?? 0
+      const notYetCount = res?.notYetDueCount ?? res?.notYetDue?.length ?? 0
 
       if (res?.configured === false) {
         toast({
@@ -368,20 +398,31 @@ export default function UsersPage() {
       if (sentCount > 0) {
         toast({
           title: 'Checagem de lembretes concluída!',
-          description: `${sentCount} e-mail(s) de lembrete enviado(s) com sucesso para colaboradores com viagens pendentes.`,
+          description:
+            res.message ||
+            `${sentCount} e-mail(s) de lembrete enviado(s) com sucesso para colaboradores com viagens pendentes.`,
         })
-      } else if (dueCount === 0) {
+      } else if (awaitingCount > 0) {
+        // Viagens em atraso existem, mas já foram notificadas e ainda não atingiram o intervalo de reenvio
+        const minNext = Math.min(
+          ...(res.awaitingNextCycle?.map((i) => i.nextReminderInDays) ?? [7]),
+        )
+        toast({
+          title: 'Lembretes em dia',
+          description:
+            res.message ||
+            `Nenhum novo e-mail enviado: todas as ${awaitingCount} viagem(ns) em atraso já receberam lembrete. Próximo reenvio em ${minNext} dia(s).`,
+        })
+      } else if (notYetCount > 0) {
         toast({
           title: 'Nenhuma viagem pendente',
           description:
-            'Todas as viagens finalizadas estão em dia ou com relatórios já enviados. Nenhum lembrete foi necessário.',
+            'Todas as viagens pendentes ainda estão dentro do prazo configurado. Nenhum lembrete foi necessário.',
         })
       } else {
         toast({
           title: 'Checagem concluída',
-          description:
-            res?.message ||
-            'Nenhum novo lembrete foi enviado (viagens já alertadas anteriormente).',
+          description: res?.message || 'Nenhum lembrete a enviar no momento.',
         })
       }
     } catch (err: any) {
@@ -1111,6 +1152,232 @@ export default function UsersPage() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal de Detalhamento da Simulação de Lembretes (Dry-Run) */}
+      <Dialog
+        open={Boolean(simulationResult)}
+        onOpenChange={(open) => !open && setSimulationResult(null)}
+      >
+        <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold text-slate-900 flex items-center gap-2">
+              <Clock className="w-5 h-5 text-blue-600" />
+              Resultado da Simulação de Lembretes (Dry-Run)
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Nenhum e-mail foi disparado. Abaixo está o diagnóstico completo da situação de cada
+              viagem pendente de relatório.
+            </DialogDescription>
+          </DialogHeader>
+
+          {simulationResult && (
+            <div className="space-y-4 py-2">
+              {/* Banner de Resumo */}
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3.5">
+                <div className="flex items-start gap-2.5">
+                  <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <p className="text-xs font-semibold text-slate-800">Diagnóstico do Sistema</p>
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      {simulationResult.message}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Métricas rápidas */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3 pt-3 border-t border-slate-200/70 text-center">
+                  <div className="p-2 rounded bg-white border border-slate-200/60">
+                    <div className="text-[10px] text-slate-500 uppercase tracking-wide">
+                      Avaliadas
+                    </div>
+                    <div className="text-lg font-bold text-slate-800">
+                      {simulationResult.tripsAssessed ?? simulationResult.evaluatedTripsCount ?? 0}
+                    </div>
+                  </div>
+                  <div className="p-2 rounded bg-white border border-slate-200/60">
+                    <div className="text-[10px] text-amber-700 uppercase tracking-wide font-medium">
+                      Devidas Agora
+                    </div>
+                    <div className="text-lg font-bold text-amber-700">
+                      {simulationResult.dueRemindersCount ?? simulationResult.dueNow?.length ?? 0}
+                    </div>
+                  </div>
+                  <div className="p-2 rounded bg-white border border-slate-200/60">
+                    <div className="text-[10px] text-blue-700 uppercase tracking-wide font-medium">
+                      Aguardam Próximo Ciclo
+                    </div>
+                    <div className="text-lg font-bold text-blue-700">
+                      {simulationResult.awaitingNextCycleCount ??
+                        simulationResult.awaitingNextCycle?.length ??
+                        0}
+                    </div>
+                  </div>
+                  <div className="p-2 rounded bg-white border border-slate-200/60">
+                    <div className="text-[10px] text-emerald-700 uppercase tracking-wide font-medium">
+                      No Prazo
+                    </div>
+                    <div className="text-lg font-bold text-emerald-700">
+                      {simulationResult.notYetDueCount ?? simulationResult.notYetDue?.length ?? 0}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Seção 1: Devidas Agora */}
+              {simulationResult.dueNow && simulationResult.dueNow.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-amber-800">
+                    <AlertTriangle className="w-4 h-4 text-amber-600" />
+                    <span>
+                      Lembretes que seriam enviados agora ({simulationResult.dueNow.length})
+                    </span>
+                  </div>
+                  <div className="space-y-2">
+                    {simulationResult.dueNow.map((item) => (
+                      <div
+                        key={item.tripId}
+                        className="p-3 rounded-lg border border-amber-200 bg-amber-50/50 text-xs space-y-1.5"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-900">{item.destination}</span>
+                          <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-[10px]">
+                            {item.isRecurrence
+                              ? `Recorrência #${item.sequenceNumber}`
+                              : '1º Alerta'}
+                          </Badge>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-[11px] text-slate-600">
+                          <div>
+                            Fim da viagem:{' '}
+                            <strong className="text-slate-800">{formatDateBR(item.endDate)}</strong>{' '}
+                            ({item.daysElapsed} dias atrás)
+                          </div>
+                          <div>
+                            Destinatário:{' '}
+                            <strong className="text-slate-800">{item.recipientName}</strong> (
+                            {item.recipientEmail})
+                          </div>
+                        </div>
+                        {item.isRecurrence && item.daysSinceLastReminder !== null && (
+                          <div className="text-[11px] text-amber-800 flex items-center gap-1">
+                            <History className="w-3 h-3" />
+                            <span>
+                              Último lembrete enviado há {item.daysSinceLastReminder} dias
+                              (intervalo de repetição: a cada {item.repeatIntervalDays} dias).
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Seção 2: Em atraso, mas aguardando próximo ciclo */}
+              {simulationResult.awaitingNextCycle &&
+                simulationResult.awaitingNextCycle.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-blue-900">
+                      <History className="w-4 h-4 text-blue-600" />
+                      <span>
+                        Viagens em atraso já notificadas — Aguardando próximo ciclo (
+                        {simulationResult.awaitingNextCycle.length})
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Estas viagens estão fora do prazo original, mas o lembrete anterior já foi
+                      enviado recentemente e o intervalo mínimo de repetição ainda não foi atingido.
+                    </p>
+                    <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                      {simulationResult.awaitingNextCycle.map((item) => (
+                        <div
+                          key={item.tripId}
+                          className="p-3 rounded-lg border border-blue-200 bg-blue-50/40 text-xs space-y-1.5"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="font-bold text-slate-900 flex items-center gap-2">
+                              <span>{item.destination}</span>
+                              <span className="text-[10px] text-slate-500 font-normal">
+                                (Fim: {formatDateBR(item.endDate)})
+                              </span>
+                            </div>
+                            <Badge className="bg-blue-100 text-blue-800 border-blue-300 text-[10px] gap-1">
+                              <Check className="w-3 h-3 text-blue-700" />
+                              {item.remindersSentCount} lembrete(s) enviado(s)
+                            </Badge>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-[11px] text-slate-600">
+                            <div>
+                              Atraso desde o término:{' '}
+                              <strong className="text-red-700">{item.daysOverdue} dias</strong>
+                            </div>
+                            <div>
+                              Último envio:{' '}
+                              <strong className="text-slate-800">
+                                {item.daysSinceLastReminder} dias atrás
+                              </strong>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between pt-1 border-t border-blue-100 text-[11px]">
+                            <span className="text-slate-600">
+                              Repete a cada <strong>{item.repeatIntervalDays} dias</strong>
+                            </span>
+                            <span className="font-semibold text-blue-800 bg-blue-100/80 px-2 py-0.5 rounded">
+                              Próximo envio em ~{item.nextReminderInDays} dia(s) (
+                              {formatDateBR(item.nextReminderDate)})
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+              {/* Seção 3: Dentro do prazo */}
+              {simulationResult.notYetDue && simulationResult.notYetDue.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-800">
+                    <CheckCircle className="w-4 h-4 text-emerald-600" />
+                    <span>
+                      Viagens dentro do prazo regular ({simulationResult.notYetDue.length})
+                    </span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {simulationResult.notYetDue.map((item) => (
+                      <div
+                        key={item.tripId}
+                        className="p-2.5 rounded-lg border border-emerald-200 bg-emerald-50/40 text-xs flex items-center justify-between"
+                      >
+                        <div>
+                          <span className="font-semibold text-slate-800">{item.destination}</span>
+                          <span className="text-slate-500 text-[11px] ml-2">
+                            Fim: {formatDateBR(item.endDate)} ({item.daysElapsed} dia(s) atrás)
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-emerald-800 font-medium bg-emerald-100 px-2 py-0.5 rounded">
+                          Alerta em {item.daysUntilDue} dia(s)
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              type="button"
+              onClick={() => setSimulationResult(null)}
+              className="text-xs h-9 bg-slate-800 hover:bg-slate-900 text-white"
+            >
+              Fechar Diagnóstico
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

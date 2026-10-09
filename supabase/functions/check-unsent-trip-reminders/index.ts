@@ -322,17 +322,69 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // 6. Avaliar viagens conforme a nova regra:
-    // - 1º Alerta: se nenhum lembrete enviado e dias decorridos do fim >= alert_unsent_trip_days (padrão 5)
-    // - Reenvio recorrente: se já houve pelo menos 1 lembrete e se passaram >= alert_unsent_trip_repeat_days (padrão 7)
-    //   desde o último envio
+    // 6. Avaliar viagens categorizando em 3 grupos claros:
+    // - dueNow: viagens com alerta devido hoje (1º alerta ou ciclo de repetição atingido)
+    // - awaitingNextCycle: viagens em atraso (daysElapsed >= alert_unsent_trip_days) mas que já foram
+    //   notificadas e cujo próximo reenvio ainda NÃO venceu
+    // - notYetDue: viagens dentro do prazo normal (daysElapsed < alert_unsent_trip_days)
     const today = new Date()
     const todayMidnight = new Date(
       Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()),
     )
     const nowMs = Date.now()
 
+    interface DueReminderItem {
+      tripId: string
+      destination: string
+      status: string
+      endDate: string
+      daysElapsed: number
+      daysOverdue: number
+      configuredDays: number
+      repeatIntervalDays: number
+      isRecurrence: boolean
+      sequenceNumber: number
+      lastSentAt: string | null
+      daysSinceLastReminder: number | null
+      recipientEmail: string
+      recipientName: string
+    }
+
+    interface AwaitingNextCycleItem {
+      tripId: string
+      destination: string
+      status: string
+      endDate: string
+      daysElapsed: number
+      daysOverdue: number
+      configuredDays: number
+      repeatIntervalDays: number
+      remindersSentCount: number
+      lastReminderAt: string
+      daysSinceLastReminder: number
+      nextReminderInDays: number
+      nextReminderDate: string
+      recipientEmail: string
+      recipientName: string
+    }
+
+    interface NotYetDueItem {
+      tripId: string
+      destination: string
+      status: string
+      endDate: string
+      daysElapsed: number
+      configuredDays: number
+      daysUntilDue: number
+      dueDate: string
+      recipientEmail: string
+      recipientName: string
+    }
+
     const actionsToExecute: ReminderAction[] = []
+    const dueNowItems: DueReminderItem[] = []
+    const awaitingNextCycleItems: AwaitingNextCycleItem[] = []
+    const notYetDueItems: NotYetDueItem[] = []
 
     for (const trip of candidateTrips) {
       if (!trip.user_id || !trip.end_date) continue
@@ -354,31 +406,71 @@ Deno.serve(async (req: Request) => {
       const key = `${trip.id}:${trip.user_id}`
       const history = historyMap.get(key)
 
+      // Viagem ainda está dentro do prazo configurado para o 1º alerta?
+      if (daysElapsedSinceEnd < configuredFirstDays) {
+        const daysUntilDue = Math.max(0, configuredFirstDays - daysElapsedSinceEnd)
+        const dueTimestamp = tripEndDate.getTime() + configuredFirstDays * 24 * 60 * 60 * 1000
+        const dueDate = new Date(dueTimestamp).toISOString().split('T')[0]
+
+        notYetDueItems.push({
+          tripId: trip.id,
+          destination: trip.destination,
+          status: trip.status,
+          endDate: trip.end_date,
+          daysElapsed: daysElapsedSinceEnd,
+          configuredDays: configuredFirstDays,
+          daysUntilDue,
+          dueDate,
+          recipientEmail: profile.email,
+          recipientName: profile.full_name,
+        })
+        continue
+      }
+
+      // Viagem está com prazo extrapolado (daysElapsedSinceEnd >= configuredFirstDays)
       if (!history || history.count === 0) {
-        // NENHUM lembrete enviado ainda para esta viagem
-        // Dispara o 1º alerta se daysElapsedSinceEnd >= configuredFirstDays
-        if (daysElapsedSinceEnd >= configuredFirstDays) {
-          actionsToExecute.push({
-            trip,
-            profile,
-            daysElapsedSinceEnd,
-            configuredFirstDays,
-            repeatIntervalDays,
-            isRecurrence: false,
-            sequenceNumber: 1,
-            lastSentAt: null,
-            daysSinceLastReminder: null,
-          })
+        // NENHUM lembrete enviado ainda para esta viagem: 1º alerta devido agora!
+        const action: ReminderAction = {
+          trip,
+          profile,
+          daysElapsedSinceEnd,
+          configuredFirstDays,
+          repeatIntervalDays,
+          isRecurrence: false,
+          sequenceNumber: 1,
+          lastSentAt: null,
+          daysSinceLastReminder: null,
         }
+        actionsToExecute.push(action)
+        dueNowItems.push({
+          tripId: trip.id,
+          destination: trip.destination,
+          status: trip.status,
+          endDate: trip.end_date,
+          daysElapsed: daysElapsedSinceEnd,
+          daysOverdue: daysElapsedSinceEnd,
+          configuredDays: configuredFirstDays,
+          repeatIntervalDays,
+          isRecurrence: false,
+          sequenceNumber: 1,
+          lastSentAt: null,
+          daysSinceLastReminder: null,
+          recipientEmail: profile.email,
+          recipientName: profile.full_name,
+        })
       } else {
         // Já recebeu pelo menos 1 lembrete anterior
         // Verificar se já passou o intervalo de repetição (ex: 7 dias) desde o último envio
         const lastSentDate = new Date(history.lastSentAt)
         const diffMsFromLastSent = nowMs - lastSentDate.getTime()
-        const daysSinceLastReminder = Math.floor(diffMsFromLastSent / (1000 * 60 * 60 * 24))
+        const daysSinceLastReminder = Math.max(
+          0,
+          Math.floor(diffMsFromLastSent / (1000 * 60 * 60 * 24)),
+        )
 
         if (daysSinceLastReminder >= repeatIntervalDays) {
-          actionsToExecute.push({
+          // Janela de reenvio aberta agora
+          const action: ReminderAction = {
             trip,
             profile,
             daysElapsedSinceEnd,
@@ -388,6 +480,48 @@ Deno.serve(async (req: Request) => {
             sequenceNumber: history.count + 1,
             lastSentAt: history.lastSentAt,
             daysSinceLastReminder,
+          }
+          actionsToExecute.push(action)
+          dueNowItems.push({
+            tripId: trip.id,
+            destination: trip.destination,
+            status: trip.status,
+            endDate: trip.end_date,
+            daysElapsed: daysElapsedSinceEnd,
+            daysOverdue: daysElapsedSinceEnd,
+            configuredDays: configuredFirstDays,
+            repeatIntervalDays,
+            isRecurrence: true,
+            sequenceNumber: history.count + 1,
+            lastSentAt: history.lastSentAt,
+            daysSinceLastReminder,
+            recipientEmail: profile.email,
+            recipientName: profile.full_name,
+          })
+        } else {
+          // Viagem em atraso, mas já notificada e ainda dentro da janela de cooldown do ciclo
+          const nextReminderInDays = Math.max(1, repeatIntervalDays - daysSinceLastReminder)
+          const nextReminderDateObj = new Date(
+            lastSentDate.getTime() + repeatIntervalDays * 24 * 60 * 60 * 1000,
+          )
+          const nextReminderDate = nextReminderDateObj.toISOString().split('T')[0]
+
+          awaitingNextCycleItems.push({
+            tripId: trip.id,
+            destination: trip.destination,
+            status: trip.status,
+            endDate: trip.end_date,
+            daysElapsed: daysElapsedSinceEnd,
+            daysOverdue: daysElapsedSinceEnd,
+            configuredDays: configuredFirstDays,
+            repeatIntervalDays,
+            remindersSentCount: history.count,
+            lastReminderAt: history.lastSentAt,
+            daysSinceLastReminder,
+            nextReminderInDays,
+            nextReminderDate,
+            recipientEmail: profile.email,
+            recipientName: profile.full_name,
           })
         }
       }
@@ -396,32 +530,92 @@ Deno.serve(async (req: Request) => {
     const firstReminderActions = actionsToExecute.filter((a) => !a.isRecurrence)
     const recurringActions = actionsToExecute.filter((a) => a.isRecurrence)
 
-    // Se estiver em modo dry-run, retorna detalhamento completo
+    // Formular mensagem explicativa em português (pt-BR)
+    const buildPortugueseSummary = (isDryRun: boolean, sentCount?: number) => {
+      const totalEvaluated = candidateTrips.length
+      const dueCount = actionsToExecute.length
+      const awaitingCount = awaitingNextCycleItems.length
+      const notYetCount = notYetDueItems.length
+
+      if (isDryRun) {
+        if (dueCount > 0) {
+          const parts: string[] = []
+          if (firstReminderActions.length > 0) {
+            parts.push(`${firstReminderActions.length} no 1º alerta`)
+          }
+          if (recurringActions.length > 0) {
+            parts.push(`${recurringActions.length} na recorrência`)
+          }
+          let base = `${dueCount} viagem(ns) com lembrete devido agora (${parts.join(', ')}).`
+          if (awaitingCount > 0) {
+            const minNextDays = Math.min(...awaitingNextCycleItems.map((i) => i.nextReminderInDays))
+            base += ` Além disso, ${awaitingCount} viagem(ns) em atraso já foram notificadas e aguardam o próximo ciclo (em ~${minNextDays} dias).`
+          }
+          if (notYetCount > 0) {
+            base += ` ${notYetCount} viagem(ns) ainda dentro do prazo regular.`
+          }
+          return base
+        }
+
+        if (awaitingCount > 0) {
+          const minNextDays = Math.min(...awaitingNextCycleItems.map((i) => i.nextReminderInDays))
+          const earliestDate = awaitingNextCycleItems.map((i) => i.nextReminderDate).sort()[0]
+          const formattedDate = formatDateBR(earliestDate)
+          let base = `${awaitingCount} viagem(ns) em atraso — todas já receberam lembrete. Próximo reenvio em ${minNextDays} dia(s) (a partir de ${formattedDate}).`
+          if (notYetCount > 0) {
+            base += ` Outras ${notYetCount} viagem(ns) ainda estão dentro do prazo.`
+          }
+          return base
+        }
+
+        if (notYetCount > 0) {
+          return `Todas as ${notYetCount} viagem(ns) pendentes ainda estão dentro do prazo configurado. Nenhum alerta devido.`
+        }
+
+        return `Nenhuma viagem pendente avaliada (${totalEvaluated} encontrada(s)).`
+      }
+
+      // Execução real
+      const sent = sentCount ?? 0
+      if (sent > 0) {
+        let base = `${sent} e-mail(s) de lembrete enviado(s) com sucesso.`
+        if (awaitingCount > 0) {
+          base += ` ${awaitingCount} viagem(ns) em atraso já haviam sido notificadas anteriormente.`
+        }
+        return base
+      }
+
+      if (awaitingCount > 0) {
+        const minNextDays = Math.min(...awaitingNextCycleItems.map((i) => i.nextReminderInDays))
+        return `Nenhum novo e-mail enviado: todas as ${awaitingCount} viagem(ns) em atraso já receberam lembrete. Próximo reenvio em ${minNextDays} dia(s).`
+      }
+
+      if (notYetCount > 0) {
+        return `Nenhum e-mail enviado: todas as ${notYetCount} viagem(ns) pendentes ainda estão dentro do prazo.`
+      }
+
+      return 'Nenhuma viagem pendente elegível para envio de lembrete.'
+    }
+
+    // Se estiver em modo dry-run, retorna breakdown completo
     if (dryRun) {
       return jsonResponse(
         {
           success: true,
           dryRun: true,
+          message: buildPortugueseSummary(true),
+          tripsAssessed: candidateTrips.length,
           evaluatedCount: candidateTrips.length,
           evaluatedTripsCount: candidateTrips.length,
           dueRemindersCount: actionsToExecute.length,
           firstReminderCount: firstReminderActions.length,
           recurringReminderCount: recurringActions.length,
-          dueReminders: actionsToExecute.map((a) => ({
-            tripId: a.trip.id,
-            destination: a.trip.destination,
-            status: a.trip.status,
-            endDate: a.trip.end_date,
-            daysElapsed: a.daysElapsedSinceEnd,
-            configuredDays: a.configuredFirstDays,
-            repeatIntervalDays: a.repeatIntervalDays,
-            isRecurrence: a.isRecurrence,
-            sequenceNumber: a.sequenceNumber,
-            lastSentAt: a.lastSentAt,
-            daysSinceLastReminder: a.daysSinceLastReminder,
-            recipientEmail: a.profile.email,
-            recipientName: a.profile.full_name,
-          })),
+          dueNow: dueNowItems,
+          dueReminders: dueNowItems,
+          awaitingNextCycle: awaitingNextCycleItems,
+          awaitingNextCycleCount: awaitingNextCycleItems.length,
+          notYetDue: notYetDueItems,
+          notYetDueCount: notYetDueItems.length,
         },
         200,
       )
@@ -436,11 +630,17 @@ Deno.serve(async (req: Request) => {
           error: 'Provedor de e-mail não configurado',
           message:
             'A chave RESEND_API_KEY não foi configurada nas variáveis de ambiente do backend Supabase. Os lembretes não puderam ser disparados automaticamente.',
+          tripsAssessed: candidateTrips.length,
           evaluatedCount: candidateTrips.length,
           evaluatedTripsCount: candidateTrips.length,
           dueRemindersCount: actionsToExecute.length,
           firstReminderCount: firstReminderActions.length,
           recurringReminderCount: recurringActions.length,
+          dueNow: dueNowItems,
+          awaitingNextCycle: awaitingNextCycleItems,
+          awaitingNextCycleCount: awaitingNextCycleItems.length,
+          notYetDue: notYetDueItems,
+          notYetDueCount: notYetDueItems.length,
         },
         200,
       )
@@ -651,11 +851,19 @@ Deno.serve(async (req: Request) => {
     return jsonResponse(
       {
         success: true,
+        message: buildPortugueseSummary(false, successfulCount),
+        tripsAssessed: candidateTrips.length,
+        evaluatedCount: candidateTrips.length,
         evaluatedTripsCount: candidateTrips.length,
         dueRemindersCount: actionsToExecute.length,
         firstReminderCount: firstReminderActions.length,
         recurringReminderCount: recurringActions.length,
         remindersSent: successfulCount,
+        dueNow: dueNowItems,
+        awaitingNextCycle: awaitingNextCycleItems,
+        awaitingNextCycleCount: awaitingNextCycleItems.length,
+        notYetDue: notYetDueItems,
+        notYetDueCount: notYetDueItems.length,
         results,
       },
       200,

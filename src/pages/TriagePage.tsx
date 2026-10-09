@@ -84,11 +84,11 @@ export default function TriagePage() {
     try {
       const allTrips = await storageService.listTrips()
       const allExpenses = await storageService.listExpenses()
-      // A fila de triagem contém APENAS comprovantes pendentes de conferência (is_verified = false).
-      // Sem fallback para despesas já verificadas: quando não há pendentes, a página exibe o
-      // estado vazio "Nenhum comprovante pendente de triagem!".
+      // Critério defensivo da fila de triagem:
+      // Pendente de triagem = recibo sem conferência manual completa (!e.audit_manual_checked) OU sem viagem vinculada (!e.trip_id).
+      // O estado vazio só é exibido quando realmente não houver despesas pendentes por esse critério.
       const listToReview = allExpenses
-        .filter((e) => !e.is_verified)
+        .filter((e) => !e.audit_manual_checked || !e.trip_id)
         .slice()
         .sort((a, b) => {
           // Receipts that have extracted amounts or dates should be prioritized or in natural order
@@ -208,6 +208,12 @@ export default function TriagePage() {
     }
 
     try {
+      const auditorName =
+        user?.user_metadata?.full_name ||
+        user?.user_metadata?.name ||
+        user?.email?.split('@')[0] ||
+        'Auditor Corporativo'
+
       const updated = await storageService.updateExpense(currentExpense.id, {
         issue_date: issueDate,
         issue_time: issueTime || null,
@@ -217,11 +223,16 @@ export default function TriagePage() {
         amount: parsedAmount,
         trip_id: assignedTripId || null,
         is_verified: true,
+        audit_manual_checked: true,
+        audit_manual_checked_at: new Date().toISOString(),
+        audit_manual_checked_by_id: user?.id || null,
+        audit_manual_checked_by_name: auditorName,
+        audit_status: 'conforme',
       })
 
       toast({
-        title: 'Comprovante verificado e salvo!',
-        description: `Dados de ${merchantName} confirmados para auditoria.`,
+        title: 'Comprovante verificado e conferido!',
+        description: `Dados de ${merchantName} confirmados e marcados como conformes na auditoria.`,
       })
 
       // Update in local state
@@ -283,9 +294,8 @@ export default function TriagePage() {
       showExpenseDeletedUndoToast({
         expense: deletedExp,
         onRestored: (restored) => {
-          // Somente comprovantes ainda pendentes (is_verified = false) voltam para a fila
-          // de triagem; itens já conferidos permanecem fora da fila sem quebrar o toast.
-          if (!restored.is_verified) {
+          // Volta para a fila de triagem se ainda for pendente pelo critério defensivo
+          if (!restored.audit_manual_checked || !restored.trip_id) {
             setExpenses((prev) => [restored, ...prev])
           }
         },

@@ -275,8 +275,9 @@ export default function TripDetailPage() {
   const handleToggleManualAudit = async (exp: Expense, markConforme: boolean) => {
     if (!trip || !user) return
 
-    const locked = storageService.isTripLocked(trip.status)
-    if (locked) {
+    // Viagens fechadas ou reembolsadas bloqueiam conferência manual.
+    // Viagens auditadas permitem marcar/desmarcar (suportando a regressão para em_triagem se desfeita).
+    if (trip.status === 'fechada' || trip.status === 'reembolsada') {
       toast({
         title: 'Ação não permitida',
         description:
@@ -304,6 +305,12 @@ export default function TripDetailPage() {
         // Atualiza a fonte da verdade (lista carregada do banco); o contador de
         // conferência e o modal de visualização derivam dela em tempo real.
         setExpenses((prev) => prev.map((e) => (e.id === exp.id ? updated : e)))
+        // Recarregar os dados da viagem atualiza imediatamente o status promovido/regredido pelo trigger do banco
+        const updatedTrip = await storageService.getTrip(trip.id)
+        if (updatedTrip) {
+          setTrip(updatedTrip)
+          setEditStatus(updatedTrip.status)
+        }
       }
 
       toast({
@@ -344,7 +351,7 @@ export default function TripDetailPage() {
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'expenses', filter: `trip_id=eq.${id}` },
-        (payload) => {
+        async (payload) => {
           const row = payload.new as { id?: string } | null
           if (!row?.id) return
           const rowId = String(row.id)
@@ -352,6 +359,15 @@ export default function TripDetailPage() {
             if (!prev.some((e) => e.id === rowId)) return prev
             return prev.map((e) => (e.id === rowId ? storageService.mapExpenseRowPublic(row) : e))
           })
+          // Atualiza também os dados da viagem (ex: status promovido para auditada ou total recalculado)
+          try {
+            const updatedTrip = await storageService.getTrip(id)
+            if (updatedTrip) {
+              setTrip(updatedTrip)
+            }
+          } catch (tErr) {
+            console.warn('Erro ao atualizar dados da viagem via Realtime:', tErr)
+          }
         },
       )
       .subscribe()
@@ -1823,10 +1839,10 @@ export default function TripDetailPage() {
 
                       {/* Botão de Conferência Manual: OK / Desfazer */}
                       <td className="py-3.5 px-4 text-center" onClick={(e) => e.stopPropagation()}>
-                        {isTripLocked ? (
+                        {effectiveStatus === 'fechada' || effectiveStatus === 'reembolsada' ? (
                           <span
                             className="inline-flex items-center gap-1 text-[11px] text-slate-400 font-medium cursor-not-allowed select-none"
-                            title="Viagem fechada — conferência bloqueada"
+                            title="Viagem fechada ou reembolsada — conferência bloqueada"
                           >
                             <Lock className="w-3 h-3 text-slate-400" />
                             <span>Bloqueado</span>
@@ -2550,7 +2566,7 @@ export default function TripDetailPage() {
                         <ShieldCheck className="w-4 h-4 text-emerald-600" />
                         <span>Conforme (verificado manualmente)</span>
                       </span>
-                      {!isTripLocked && (
+                      {effectiveStatus !== 'fechada' && effectiveStatus !== 'reembolsada' && (
                         <Button
                           variant="ghost"
                           size="sm"
@@ -2568,7 +2584,8 @@ export default function TripDetailPage() {
                       )}
                     </div>
                   ) : (
-                    !isTripLocked && (
+                    effectiveStatus !== 'fechada' &&
+                    effectiveStatus !== 'reembolsada' && (
                       <Button
                         size="sm"
                         disabled={checkingExpenseId === viewingExpense.id}

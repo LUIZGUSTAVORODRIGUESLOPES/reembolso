@@ -762,7 +762,9 @@ class SupabaseStorageService {
 
     if (expense.trip_id) {
       const trip = await this.getTrip(expense.trip_id)
-      if (trip && this.isTripLockedForDeletion(trip.status)) {
+      // Bloqueio apenas se a viagem já estiver fechada ou reembolsada.
+      // Viagens 'auditada' permitem marcar ou desmarcar conferência manual (comportamento de regressão auditada -> em_triagem).
+      if (trip && (trip.status === 'fechada' || trip.status === 'reembolsada')) {
         throw new Error('Viagem fechada ou reembolsada não permite alteração de auditoria.')
       }
     }
@@ -1243,13 +1245,14 @@ class SupabaseStorageService {
   public async getDashboardMetrics() {
     const trips = await this.listTrips()
 
-    // Total a reembolsar: soma de todas as viagens em aberto (em_triagem, com_pendencias, auditada)
-    const openTrips = trips.filter((t) =>
-      ['em_triagem', 'com_pendencias', 'auditada'].includes(t.status),
-    )
-    const totalToRefund = openTrips.reduce((acc, t) => acc + (t.total_amount || 0), 0)
+    // Total a reembolsar: soma de todas as viagens em aberto e auditadas ainda não quitadas
+    const pendingTrips = trips.filter((t) => t.status !== 'reembolsada')
+    const totalToRefund = pendingTrips.reduce((acc, t) => acc + (t.total_amount || 0), 0)
 
-    // Viagens em aberto
+    // Viagens em aberto: viagens em triagem ou com pendências (fase operacional 'em_aberto')
+    const openTrips = trips.filter(
+      (t) => ['em_triagem', 'com_pendencias'].includes(t.status) && !t.report_sent_at,
+    )
     const openTripsCount = openTrips.length
 
     // Alertas de auditoria ativos

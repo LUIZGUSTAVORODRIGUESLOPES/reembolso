@@ -42,6 +42,10 @@ export function getTripPhase(
     return 'quitadas'
   }
 
+  // Viagens empacotadas / enviadas:
+  // Relatório despachado por e-mail (report_sent_at preenchido)
+  // OU status 'auditada' (100% conferida, pronta para envio/quitação)
+  // OU status 'fechada' (processo concluído aguardando quitação)
   if (
     Boolean(trip.report_sent_at) ||
     effectiveStatus === 'auditada' ||

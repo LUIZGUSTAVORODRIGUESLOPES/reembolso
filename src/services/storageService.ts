@@ -16,14 +16,15 @@ class SupabaseStorageService {
 
   // Trips CRUD
   public async listTrips(): Promise<Trip[]> {
-    // 1. First attempt: full join with profiles
+    // 1. First attempt: full join with profiles, ordenado pelo período (start_date) mais antigo primeiro
     let tripsRaw: any[] | null = null
 
     try {
       const { data, error } = await this.client
         .from('trips')
         .select('*, user_profile:profiles(*)')
-        .order('created_at', { ascending: false })
+        .order('start_date', { ascending: true, nullsFirst: false })
+        .order('created_at', { ascending: true })
 
       if (!error && data) {
         tripsRaw = data
@@ -42,7 +43,8 @@ class SupabaseStorageService {
       const { data: fallbackData, error: fallbackError } = await this.client
         .from('trips')
         .select('*')
-        .order('created_at', { ascending: false })
+        .order('start_date', { ascending: true, nullsFirst: false })
+        .order('created_at', { ascending: true })
 
       if (fallbackError) {
         console.error('Fatal error fetching trips:', fallbackError)
@@ -1283,6 +1285,8 @@ class SupabaseStorageService {
         is_active: row.user_profile.is_active ?? true,
         created_at: row.user_profile.created_at,
         updated_at: row.user_profile.updated_at,
+        alert_unsent_trip_enabled: row.user_profile.alert_unsent_trip_enabled ?? true,
+        alert_unsent_trip_days: row.user_profile.alert_unsent_trip_days ?? 5,
       }
     }
 

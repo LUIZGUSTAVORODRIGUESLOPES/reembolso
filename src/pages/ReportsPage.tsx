@@ -118,11 +118,11 @@ export default function ReportsPage() {
     return countTripsByPhase(matchingTrips)
   }, [trips, searchQuery])
 
-  // Viagens filtradas por fase e busca textual
+  // Viagens filtradas por fase e busca textual, ordenadas por período mais antigo primeiro
   const filteredTrips = React.useMemo(() => {
     const normalizedQuery = normalizeSearchText(searchQuery)
 
-    return trips.filter((t) => {
+    const list = trips.filter((t) => {
       // Filtro de fase
       if (phaseFilter !== 'todas') {
         const phase = getTripPhase(t)
@@ -142,6 +142,21 @@ export default function ReportsPage() {
       }
 
       return true
+    })
+
+    // Ordenação consistente: período da viagem (start_date) mais antigo primeiro
+    return list.sort((a, b) => {
+      const dateA = a.start_date || ''
+      const dateB = b.start_date || ''
+      if (dateA && dateB) {
+        const diff = dateA.localeCompare(dateB)
+        if (diff !== 0) return diff
+      } else if (dateA && !dateB) {
+        return -1
+      } else if (!dateA && dateB) {
+        return 1
+      }
+      return (a.created_at || '').localeCompare(b.created_at || '')
     })
   }, [trips, phaseFilter, searchQuery])
 

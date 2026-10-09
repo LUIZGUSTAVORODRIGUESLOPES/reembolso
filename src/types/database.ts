@@ -35,6 +35,8 @@ export interface Profile {
   created_at: string
   updated_at: string
   trips_count?: number
+  alert_unsent_trip_enabled?: boolean
+  alert_unsent_trip_days?: number
 }
 
 export type StandaloneRequestStatus = 'em_triagem' | 'empacotada' | 'quitada'

@@ -216,11 +216,11 @@ export default function Index() {
     return countTripsByPhase(tripsMatchingOtherFilters)
   }, [trips, periodFilter, statusFilter, searchQuery])
 
-  // Filter trips instantaneamente por Fase, Período, Status e Busca por Texto
+  // Filter and sort trips: ordenação padrão pelo período (data de início), mais antigas primeiro
   const filteredTrips = useMemo(() => {
     const normalizedQuery = normalizeSearchText(searchQuery)
 
-    return trips.filter((t) => {
+    const result = trips.filter((t) => {
       // Phase filter: em_aberto, empacotadas, quitadas
       if (phaseFilter !== 'todas') {
         const phase = getTripPhase(t)
@@ -251,6 +251,22 @@ export default function Index() {
       }
 
       return true
+    })
+
+    // Ordenação explícita pelo período da viagem (start_date) mais antigas primeiro (ASC),
+    // desempatando por created_at ASC para estimular fechar/enviar viagens antigas primeiro.
+    return result.sort((a, b) => {
+      const dateA = a.start_date || ''
+      const dateB = b.start_date || ''
+      if (dateA && dateB) {
+        const diff = dateA.localeCompare(dateB)
+        if (diff !== 0) return diff
+      } else if (dateA && !dateB) {
+        return -1
+      } else if (!dateA && dateB) {
+        return 1
+      }
+      return (a.created_at || '').localeCompare(b.created_at || '')
     })
   }, [trips, phaseFilter, periodFilter, statusFilter, searchQuery])
 

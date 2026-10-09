@@ -50,6 +50,8 @@ export const userService = {
       is_active: p.is_active ?? true,
       created_at: p.created_at,
       updated_at: p.updated_at,
+      alert_unsent_trip_enabled: p.alert_unsent_trip_enabled ?? true,
+      alert_unsent_trip_days: p.alert_unsent_trip_days ?? 5,
       // If user is admin and orphan trips exist, they manage those trips too
       trips_count: (countMap[p.id] || 0) + (p.role === 'admin' ? orphanTripsCount : 0),
     }))
@@ -60,14 +62,22 @@ export const userService = {
    */
   async updateUser(
     userId: string,
-    updates: { role?: UserRole; is_active?: boolean; full_name?: string },
+    updates: {
+      role?: UserRole
+      is_active?: boolean
+      full_name?: string
+      alert_unsent_trip_enabled?: boolean
+      alert_unsent_trip_days?: number
+    },
   ): Promise<Profile> {
+    const payload: Record<string, unknown> = {
+      ...updates,
+      updated_at: new Date().toISOString(),
+    }
+
     const { data, error } = await (supabase as any)
       .from('profiles')
-      .update({
-        ...updates,
-        updated_at: new Date().toISOString(),
-      })
+      .update(payload)
       .eq('id', userId)
       .select()
       .single()
@@ -85,6 +95,8 @@ export const userService = {
       is_active: data.is_active,
       created_at: data.created_at,
       updated_at: data.updated_at,
+      alert_unsent_trip_enabled: data.alert_unsent_trip_enabled ?? true,
+      alert_unsent_trip_days: data.alert_unsent_trip_days ?? 5,
     }
   },
 
@@ -143,8 +155,23 @@ export const userService = {
         is_active: p.is_active ?? true,
         created_at: p.created_at,
         updated_at: p.updated_at,
+        alert_unsent_trip_enabled: p.alert_unsent_trip_enabled ?? true,
+        alert_unsent_trip_days: p.alert_unsent_trip_days ?? 5,
       }
     }
     return map
+  },
+
+  /**
+   * Invoca a edge function check-unsent-trip-reminders para checagem manual/teste
+   */
+  async triggerReminderCheck(params?: { dryRun?: boolean; specificUserId?: string }) {
+    const { data, error } = await supabase.functions.invoke('check-unsent-trip-reminders', {
+      body: params || {},
+    })
+    if (error) {
+      throw error
+    }
+    return data
   },
 }

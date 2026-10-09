@@ -16,22 +16,81 @@ import {
   ChevronRight,
   LogOut,
   Users,
+  BellRing,
+  Settings,
 } from 'lucide-react'
 import { storageService } from '@/services/storageService'
+import { userService } from '@/services/userService'
 import { useToast } from '@/hooks/use-toast'
 import { useAuth } from '@/hooks/use-auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Switch } from '@/components/ui/switch'
+import { Label } from '@/components/ui/label'
 
 export default function Layout() {
   const location = useLocation()
   const navigate = useNavigate()
   const { toast } = useToast()
-  const { user, profile, isAdmin, signOut } = useAuth()
+  const { user, profile, isAdmin, signOut, refreshProfile } = useAuth()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [activeAlertsCount, setActiveAlertsCount] = useState<number>(0)
   const [searchQuery, setSearchQuery] = useState('')
+
+  // Modal para qualquer colaborador configurar seus próprios alertas de viagem
+  const [isSelfAlertModalOpen, setIsSelfAlertModalOpen] = useState(false)
+  const [selfAlertEnabled, setSelfAlertEnabled] = useState(true)
+  const [selfAlertDays, setSelfAlertDays] = useState(5)
+  const [savingSelfAlert, setSavingSelfAlert] = useState(false)
+
+  const handleOpenSelfAlertModal = () => {
+    setSelfAlertEnabled(profile?.alert_unsent_trip_enabled ?? true)
+    setSelfAlertDays(profile?.alert_unsent_trip_days ?? 5)
+    setIsSelfAlertModalOpen(true)
+  }
+
+  const handleSaveSelfAlert = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!profile?.id) return
+
+    const sanitizedDays = Math.max(1, Math.min(90, Number(selfAlertDays) || 5))
+    try {
+      setSavingSelfAlert(true)
+      await userService.updateUser(profile.id, {
+        alert_unsent_trip_enabled: selfAlertEnabled,
+        alert_unsent_trip_days: sanitizedDays,
+      })
+
+      if (refreshProfile) {
+        await refreshProfile()
+      }
+
+      toast({
+        title: 'Preferências salvas!',
+        description: selfAlertEnabled
+          ? `Você receberá um lembrete ${sanitizedDays} dias após o fim de viagens não enviadas.`
+          : 'Lembretes automáticos desativados.',
+      })
+      setIsSelfAlertModalOpen(false)
+    } catch (err: any) {
+      toast({
+        title: 'Erro ao salvar',
+        description: err.message || 'Falha ao salvar preferências de alertas.',
+        variant: 'destructive',
+      })
+    } finally {
+      setSavingSelfAlert(false)
+    }
+  }
 
   // Sync searchQuery with URL query parameter 'q' when on / or /trips
   const searchParams = new URLSearchParams(location.search)
@@ -181,7 +240,6 @@ export default function Layout() {
               <X className="w-5 h-5" />
             </button>
           </div>
-
           {/* Nav List */}
           <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
             <div className="px-3 pt-2 pb-1 text-[11px] font-semibold tracking-wider text-slate-400 uppercase">
@@ -265,16 +323,25 @@ export default function Layout() {
               <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
             </button>
           </nav>
-
           {/* User profile card bottom */}
           <div className="p-3 border-t border-slate-800 bg-slate-900/50">
             <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-800/50 transition-colors">
-              <div className="w-9 h-9 rounded-full bg-blue-700/50 text-blue-200 border border-blue-500/40 font-bold text-xs flex items-center justify-center shrink-0">
+              <div
+                onClick={handleOpenSelfAlertModal}
+                title="Configurar meus alertas de viagens não enviadas"
+                className="w-9 h-9 rounded-full bg-blue-700/50 text-blue-200 border border-blue-500/40 font-bold text-xs flex items-center justify-center shrink-0 cursor-pointer hover:ring-2 hover:ring-blue-400 transition"
+              >
                 {initials}
               </div>
-              <div className="min-w-0 flex-1">
+              <div
+                className="min-w-0 flex-1 cursor-pointer"
+                onClick={handleOpenSelfAlertModal}
+                title="Clique para configurar seus alertas"
+              >
                 <div className="flex items-center gap-1.5">
-                  <p className="text-xs font-semibold text-white truncate">{userName}</p>
+                  <p className="text-xs font-semibold text-white truncate hover:underline">
+                    {userName}
+                  </p>
                 </div>
                 <div className="flex items-center gap-1.5 mt-0.5">
                   <Badge
@@ -290,15 +357,24 @@ export default function Layout() {
                 </div>
                 <p className="text-[10px] text-slate-400 truncate mt-0.5">{userEmail}</p>
               </div>
-              <button
-                onClick={handleSignOut}
-                title="Encerrar Sessão (Logout)"
-                className="text-slate-400 hover:text-red-400 p-1.5 rounded transition-colors"
-              >
-                <LogOut className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={handleOpenSelfAlertModal}
+                  title="Configurar meus alertas de viagens"
+                  className="text-slate-400 hover:text-amber-300 p-1.5 rounded transition-colors"
+                >
+                  <BellRing className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={handleSignOut}
+                  title="Encerrar Sessão (Logout)"
+                  className="text-slate-400 hover:text-red-400 p-1.5 rounded transition-colors"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              </div>
             </div>
-          </div>
+          </div>{' '}
         </aside>
 
         {/* Main Workspace Area */}
@@ -409,6 +485,109 @@ export default function Layout() {
           </footer>
         </div>
       </div>
+
+      {/* Modal de Configuração de Alertas do Próprio Usuário */}
+      <Dialog open={isSelfAlertModalOpen} onOpenChange={setIsSelfAlertModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <form onSubmit={handleSaveSelfAlert}>
+            <DialogHeader>
+              <DialogTitle className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <BellRing className="w-5 h-5 text-amber-600" />
+                Meus Alertas de Viagens Não Enviadas
+              </DialogTitle>
+              <DialogDescription className="text-xs text-slate-500">
+                Defina quando você deseja receber lembretes por e-mail para viagens que terminaram e
+                ainda não tiveram suas prestações de contas despachadas.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4 py-4">
+              <div className="flex items-center justify-between rounded-lg border border-slate-200 p-3 bg-white">
+                <div className="space-y-0.5">
+                  <Label
+                    htmlFor="self-alert-toggle"
+                    className="text-xs font-semibold text-slate-800 cursor-pointer"
+                  >
+                    Receber lembrete por e-mail
+                  </Label>
+                  <p className="text-[11px] text-slate-500">
+                    Avisar quando eu esquecer de despachar o relatório da viagem
+                  </p>
+                </div>
+                <Switch
+                  id="self-alert-toggle"
+                  checked={selfAlertEnabled}
+                  onCheckedChange={setSelfAlertEnabled}
+                />
+              </div>
+
+              {selfAlertEnabled && (
+                <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50/50 p-3.5">
+                  <div className="flex items-center justify-between">
+                    <Label
+                      htmlFor="self-alert-days"
+                      className="text-xs font-semibold text-slate-800"
+                    >
+                      Disparar e-mail após quantos dias do término?
+                    </Label>
+                    <span className="font-bold text-sm text-amber-700 bg-amber-100 px-2 py-0.5 rounded">
+                      {selfAlertDays} {selfAlertDays === 1 ? 'dia' : 'dias'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <Input
+                      id="self-alert-days"
+                      type="number"
+                      min={1}
+                      max={90}
+                      value={selfAlertDays}
+                      onChange={(e) =>
+                        setSelfAlertDays(Math.max(1, Math.min(90, parseInt(e.target.value) || 1)))
+                      }
+                      className="w-24 h-9 text-xs bg-white text-center font-semibold"
+                    />
+                    <input
+                      type="range"
+                      min={1}
+                      max={30}
+                      value={selfAlertDays}
+                      onChange={(e) => setSelfAlertDays(parseInt(e.target.value) || 1)}
+                      className="flex-1 accent-amber-600 cursor-pointer"
+                    />
+                  </div>
+
+                  <p className="text-[11px] text-slate-600 pt-1">
+                    Você receberá um e-mail <strong>{selfAlertDays} dias</strong> após o fim da
+                    viagem se ela continuar sem envio. Um único lembrete é enviado para cada viagem
+                    para evitar mensagens repetitivas.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setIsSelfAlertModalOpen(false)}
+                className="text-xs h-9"
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={savingSelfAlert}
+                className="bg-[#1e40af] hover:bg-[#1d3d9e] text-white text-xs h-9"
+              >
+                Salvar Preferência
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

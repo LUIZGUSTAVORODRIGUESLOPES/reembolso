@@ -12,7 +12,15 @@ import {
   Lock,
   Mail,
   User as UserIcon,
+  Bell,
+  BellRing,
+  BellOff,
+  Settings,
+  Info,
+  Clock,
+  Sparkles,
 } from 'lucide-react'
+import { Switch } from '@/components/ui/switch'
 import { userService } from '@/services/userService'
 import { Profile, UserRole } from '@/types/database'
 import { useAuth } from '@/hooks/use-auth'
@@ -72,6 +80,13 @@ export default function UsersPage() {
   // Confirmation dialogs
   const [userToToggleStatus, setUserToToggleStatus] = useState<Profile | null>(null)
   const [userToToggleRole, setUserToToggleRole] = useState<Profile | null>(null)
+
+  // Modal de Configuração de Alertas de Viagem Não Enviada
+  const [userToConfigAlerts, setUserToConfigAlerts] = useState<Profile | null>(null)
+  const [alertEnabled, setAlertEnabled] = useState<boolean>(true)
+  const [alertDays, setAlertDays] = useState<number>(5)
+  const [savingAlertConfig, setSavingAlertConfig] = useState(false)
+  const [testingAlerts, setTestingAlerts] = useState(false)
 
   const loadUsers = async () => {
     try {
@@ -241,6 +256,77 @@ export default function UsersPage() {
     setUserToToggleStatus(targetUser)
   }
 
+  const handleOpenAlertConfig = (targetUser: Profile) => {
+    setUserToConfigAlerts(targetUser)
+    setAlertEnabled(targetUser.alert_unsent_trip_enabled ?? true)
+    setAlertDays(targetUser.alert_unsent_trip_days ?? 5)
+  }
+
+  const handleSaveAlertConfig = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!userToConfigAlerts) return
+
+    const sanitizedDays = Math.max(1, Math.min(90, Number(alertDays) || 5))
+
+    try {
+      setSavingAlertConfig(true)
+      const updated = await userService.updateUser(userToConfigAlerts.id, {
+        alert_unsent_trip_enabled: alertEnabled,
+        alert_unsent_trip_days: sanitizedDays,
+      })
+
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.id === updated.id
+            ? {
+                ...u,
+                alert_unsent_trip_enabled: updated.alert_unsent_trip_enabled,
+                alert_unsent_trip_days: updated.alert_unsent_trip_days,
+              }
+            : u,
+        ),
+      )
+
+      toast({
+        title: 'Preferências de alerta salvas!',
+        description: alertEnabled
+          ? `Lembrete ativo: e-mail será disparado ${sanitizedDays} dias após o término de viagens não enviadas.`
+          : 'Lembretes automáticos desativados para este colaborador.',
+      })
+
+      setUserToConfigAlerts(null)
+    } catch (err: any) {
+      toast({
+        title: 'Erro ao salvar configuração',
+        description: err.message || 'Falha ao gravar preferências no banco.',
+        variant: 'destructive',
+      })
+    } finally {
+      setSavingAlertConfig(false)
+    }
+  }
+
+  const handleTriggerTestReminder = async () => {
+    try {
+      setTestingAlerts(true)
+      const res = await userService.triggerReminderCheck({ dryRun: true })
+      toast({
+        title: 'Checagem de lembretes simulada (Dry-Run)',
+        description: `Viagens avaliadas: ${res?.evaluatedCount ?? 0} | Alertas devidos: ${
+          res?.dueRemindersCount ?? res?.dueReminders?.length ?? 0
+        }`,
+      })
+    } catch (err: any) {
+      toast({
+        title: 'Erro na checagem de lembretes',
+        description: err?.message || 'Falha ao executar a edge function.',
+        variant: 'destructive',
+      })
+    } finally {
+      setTestingAlerts(false)
+    }
+  }
+
   const filteredUsers = users.filter((u) => {
     const q = search.toLowerCase()
     return (
@@ -265,7 +351,7 @@ export default function UsersPage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button
             variant="outline"
             size="sm"
@@ -275,6 +361,20 @@ export default function UsersPage() {
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
             Atualizar
+          </Button>
+
+          {/* Testar motor de lembretes diários (dry-run sem spam) */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleTriggerTestReminder}
+            disabled={testingAlerts || loading}
+            title="Simula a checagem diária de viagens não enviadas sem enviar e-mails reais (Dry Run)"
+            className="text-xs h-9 gap-1.5 text-blue-700 border-blue-200 hover:bg-blue-50"
+          >
+            <Clock className={`w-3.5 h-3.5 ${testingAlerts ? 'animate-spin' : 'text-blue-600'}`} />
+            <span className="hidden sm:inline">Simular Checagem de Alertas</span>
+            <span className="sm:hidden">Simular</span>
           </Button>
 
           <Button
@@ -368,6 +468,7 @@ export default function UsersPage() {
                     <th className="py-3 px-4">Colaborador</th>
                     <th className="py-3 px-4">Papel / Perfil</th>
                     <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4">Alerta de Viagem Não Enviada</th>
                     <th className="py-3 px-4 text-center">Viagens Vinculadas</th>
                     <th className="py-3 px-4">Data de Cadastro</th>
                     <th className="py-3 px-4 text-right">Ações</th>
@@ -427,6 +528,32 @@ export default function UsersPage() {
                           )}
                         </td>
 
+                        {/* Configuração de Alerta de Viagem Não Enviada */}
+                        <td className="py-3 px-4">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenAlertConfig(item)}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors hover:bg-slate-100 border border-slate-200"
+                            title="Clique para configurar o alerta deste usuário"
+                          >
+                            {item.alert_unsent_trip_enabled !== false ? (
+                              <>
+                                <BellRing className="w-3 h-3 text-amber-600 shrink-0" />
+                                <span className="text-slate-800 font-semibold">
+                                  {item.alert_unsent_trip_days ?? 5} dias
+                                </span>
+                                <span className="text-slate-500 text-[10px]">após o fim</span>
+                              </>
+                            ) : (
+                              <>
+                                <BellOff className="w-3 h-3 text-slate-400 shrink-0" />
+                                <span className="text-slate-500">Desativado</span>
+                              </>
+                            )}
+                            <Settings className="w-2.5 h-2.5 text-slate-400 ml-0.5" />
+                          </button>
+                        </td>
+
                         <td className="py-3 px-4 text-center">
                           <span className="inline-block px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-800 font-bold text-xs">
                             {item.trips_count || 0}
@@ -439,6 +566,17 @@ export default function UsersPage() {
 
                         <td className="py-3 px-4 text-right">
                           <div className="flex items-center justify-end gap-1.5">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleOpenAlertConfig(item)}
+                              title="Configurar alerta de viagem não enviada"
+                              className="h-7 text-[11px] px-2 border-slate-200 hover:bg-amber-50 hover:text-amber-800 hover:border-amber-300 gap-1"
+                            >
+                              <Bell className="w-3 h-3 text-amber-600" />
+                              <span className="hidden sm:inline">Alertas</span>
+                            </Button>
+
                             <Button
                               variant="outline"
                               size="sm"
@@ -691,6 +829,154 @@ export default function UsersPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Modal de Configuração de Alerta de Viagem Não Enviada */}
+      <Dialog
+        open={Boolean(userToConfigAlerts)}
+        onOpenChange={(open) => !open && setUserToConfigAlerts(null)}
+      >
+        <DialogContent className="sm:max-w-md">
+          <form onSubmit={handleSaveAlertConfig}>
+            <DialogHeader>
+              <DialogTitle className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <BellRing className="w-5 h-5 text-amber-600" />
+                Alerta de Viagem Não Enviada
+              </DialogTitle>
+              <DialogDescription className="text-xs text-slate-500">
+                Configure se e quando este colaborador receberá lembretes por e-mail para viagens
+                finalizadas cujas prestações de contas ainda não foram enviadas.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4 py-4">
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">Colaborador:</span>
+                  <span className="font-semibold text-slate-800">
+                    {userToConfigAlerts?.full_name}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500">E-mail de envio:</span>
+                  <span className="text-slate-700 font-mono text-[11px]">
+                    {userToConfigAlerts?.email}
+                  </span>
+                </div>
+              </div>
+
+              {/* Toggle Habilitar / Desabilitar */}
+              <div className="flex items-center justify-between rounded-lg border border-slate-200 p-3 bg-white">
+                <div className="space-y-0.5">
+                  <Label
+                    htmlFor="alert-toggle"
+                    className="text-xs font-semibold text-slate-800 cursor-pointer"
+                  >
+                    Habilitar lembretes automáticos
+                  </Label>
+                  <p className="text-[11px] text-slate-500">
+                    Disparar e-mail de aviso quando houver viagem vencida não enviada
+                  </p>
+                </div>
+                <Switch
+                  id="alert-toggle"
+                  checked={alertEnabled}
+                  onCheckedChange={setAlertEnabled}
+                />
+              </div>
+
+              {/* Quantidade de dias (X) */}
+              {alertEnabled && (
+                <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50/50 p-3.5">
+                  <div className="flex items-center justify-between">
+                    <Label
+                      htmlFor="alert-days-input"
+                      className="text-xs font-semibold text-slate-800"
+                    >
+                      Disparar e-mail após quantos dias do fim da viagem?
+                    </Label>
+                    <span className="font-bold text-sm text-amber-700 bg-amber-100 px-2 py-0.5 rounded">
+                      {alertDays} {alertDays === 1 ? 'dia' : 'dias'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <Input
+                      id="alert-days-input"
+                      type="number"
+                      min={1}
+                      max={90}
+                      value={alertDays}
+                      onChange={(e) =>
+                        setAlertDays(Math.max(1, Math.min(90, parseInt(e.target.value) || 1)))
+                      }
+                      className="w-24 h-9 text-xs bg-white text-center font-semibold"
+                    />
+                    <input
+                      type="range"
+                      min={1}
+                      max={30}
+                      value={alertDays}
+                      onChange={(e) => setAlertDays(parseInt(e.target.value) || 1)}
+                      className="flex-1 accent-amber-600 cursor-pointer"
+                    />
+                  </div>
+
+                  {/* Feedback amigável explicando o comportamento exato */}
+                  <div className="flex items-start gap-2 pt-1 text-[11px] text-slate-600">
+                    <Info className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+                    <p>
+                      <strong>Comportamento:</strong> O colaborador receberá um e-mail{' '}
+                      <span className="text-amber-800 font-semibold">{alertDays} dias</span> após a
+                      data final da viagem se a prestação de contas continuar sem envio. Um único
+                      lembrete é enviado por viagem para não gerar repetições incômodas.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {!alertEnabled && (
+                <div className="flex items-center gap-2 p-3 rounded-lg border border-slate-200 bg-slate-50 text-xs text-slate-600">
+                  <BellOff className="w-4 h-4 text-slate-400 shrink-0" />
+                  <p>
+                    Os lembretes estão desativados para este colaborador. Nenhuma notificação por
+                    e-mail será gerada sobre viagens pendentes de envio.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setUserToConfigAlerts(null)}
+                className="text-xs h-9"
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={savingAlertConfig}
+                className="bg-[#1e40af] hover:bg-[#1d3d9e] text-white text-xs h-9 gap-1.5"
+              >
+                {savingAlertConfig ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Salvando...
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle className="w-3.5 h-3.5" />
+                    Salvar Preferência
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

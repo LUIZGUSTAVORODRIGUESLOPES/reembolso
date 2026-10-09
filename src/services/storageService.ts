@@ -206,6 +206,106 @@ class SupabaseStorageService {
   }
 
   /**
+   * Registra a marcação de envio de relatório por e-mail para a viagem.
+   */
+  public async markReportEmailSent(
+    tripId: string,
+    sentTo: string,
+    user?: { id: string; name: string } | null,
+  ): Promise<Trip | null> {
+    const updates: Record<string, unknown> = {
+      report_sent_at: new Date().toISOString(),
+      report_sent_to: sentTo.trim(),
+    }
+    if (user?.id && this.isValidUuid(user.id)) {
+      updates.report_sent_by_id = user.id
+    }
+    if (user?.name) {
+      updates.report_sent_by_name = user.name
+    }
+
+    return this.updateTrip(tripId, updates as any)
+  }
+
+  /**
+   * Quita uma viagem individualmente com depósito único.
+   */
+  public async settleSingleTrip(params: {
+    tripId: string
+    depositDate: string
+    depositAmount: number
+    user?: { id: string; name: string } | null
+  }): Promise<Trip | null> {
+    const { tripId, depositDate, depositAmount, user } = params
+    const updates: Record<string, unknown> = {
+      status: 'reembolsada',
+      settlement_date: depositDate,
+      settlement_amount: depositAmount,
+      settlement_deposit_total: depositAmount,
+      settlement_batch_id: null,
+      settlement_batch_count: 1,
+      settled_at: new Date().toISOString(),
+    }
+    if (user?.id && this.isValidUuid(user.id)) {
+      updates.settled_by_id = user.id
+    }
+    if (user?.name) {
+      updates.settled_by_name = user.name
+    }
+
+    return this.updateTrip(tripId, updates as any)
+  }
+
+  /**
+   * Quita múltiplas viagens em lote através de um depósito conjunto na mesma data.
+   */
+  public async settleBatchTrips(params: {
+    tripIds: string[]
+    depositDate: string
+    depositTotal: number
+    tripsAmounts: Record<string, number>
+    user?: { id: string; name: string } | null
+  }): Promise<Trip[]> {
+    const { tripIds, depositDate, depositTotal, tripsAmounts, user } = params
+    if (!tripIds.length) return []
+
+    // Gerar um UUID de lote único para vincular as viagens do mesmo depósito
+    const batchId =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : '00000000-0000-0000-0000-000000000000'
+
+    const nowIso = new Date().toISOString()
+    const updatedTrips: Trip[] = []
+
+    for (const tripId of tripIds) {
+      const tripAmount = tripsAmounts[tripId] ?? 0
+      const updates: Record<string, unknown> = {
+        status: 'reembolsada',
+        settlement_date: depositDate,
+        settlement_amount: tripAmount,
+        settlement_deposit_total: depositTotal,
+        settlement_batch_id: batchId,
+        settlement_batch_count: tripIds.length,
+        settled_at: nowIso,
+      }
+      if (user?.id && this.isValidUuid(user.id)) {
+        updates.settled_by_id = user.id
+      }
+      if (user?.name) {
+        updates.settled_by_name = user.name
+      }
+
+      const res = await this.updateTrip(tripId, updates as any)
+      if (res) {
+        updatedTrips.push(res)
+      }
+    }
+
+    return updatedTrips
+  }
+
+  /**
    * Verifica se a viagem está bloqueada por imutabilidade de governança
    * (status 'auditada', 'fechada' ou 'reembolsada').
    * Quando bloqueada, despesas não podem ser inseridas/alteradas/excluídas
@@ -1145,6 +1245,20 @@ class SupabaseStorageService {
       motivo: String(row.motivo || ''),
       created_at: String(row.created_at || ''),
       user_profile,
+      report_sent_at: row.report_sent_at || null,
+      report_sent_to: row.report_sent_to || null,
+      report_sent_by_id: row.report_sent_by_id || null,
+      report_sent_by_name: row.report_sent_by_name || null,
+      settlement_date: row.settlement_date || null,
+      settlement_amount: row.settlement_amount != null ? Number(row.settlement_amount) : null,
+      settlement_deposit_total:
+        row.settlement_deposit_total != null ? Number(row.settlement_deposit_total) : null,
+      settlement_batch_id: row.settlement_batch_id || null,
+      settlement_batch_count:
+        row.settlement_batch_count != null ? Number(row.settlement_batch_count) : null,
+      settled_by_id: row.settled_by_id || null,
+      settled_by_name: row.settled_by_name || null,
+      settled_at: row.settled_at || null,
     }
   }
 

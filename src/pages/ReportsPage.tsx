@@ -326,6 +326,27 @@ export default function ReportsPage() {
         setAttachedFilesNames(
           result.attachedFiles || (attachPdf ? ['relatorio_prestacao_contas.pdf'] : []),
         )
+
+        // Registrar no banco de dados que o relatório desta viagem foi enviado por e-mail
+        try {
+          const currentUserName =
+            profile?.full_name ||
+            user?.user_metadata?.full_name ||
+            user?.email?.split('@')[0] ||
+            'Usuário'
+          const updatedTrip = await storageService.markReportEmailSent(
+            selectedTrip.id,
+            emailTo.trim(),
+            user ? { id: user.id, name: currentUserName } : null,
+          )
+          if (updatedTrip) {
+            setSelectedTrip(updatedTrip)
+            setTrips((prev) => prev.map((t) => (t.id === updatedTrip.id ? updatedTrip : t)))
+          }
+        } catch (markErr) {
+          console.warn('Falha ao registrar marcação de e-mail enviado na viagem:', markErr)
+        }
+
         toast({
           title: 'E-mail enviado com sucesso!',
           description: `A prestação de contas foi entregue com o PDF consolidado para ${emailTo}.`,
@@ -370,7 +391,27 @@ export default function ReportsPage() {
     }
   }
 
-  const handleOpenClientMailTo = () => {
+  const handleOpenClientMailTo = async () => {
+    if (selectedTrip) {
+      try {
+        const currentUserName =
+          profile?.full_name ||
+          user?.user_metadata?.full_name ||
+          user?.email?.split('@')[0] ||
+          'Usuário'
+        const updatedTrip = await storageService.markReportEmailSent(
+          selectedTrip.id,
+          emailTo.trim() || 'cliente_email_local',
+          user ? { id: user.id, name: currentUserName } : null,
+        )
+        if (updatedTrip) {
+          setSelectedTrip(updatedTrip)
+          setTrips((prev) => prev.map((t) => (t.id === updatedTrip.id ? updatedTrip : t)))
+        }
+      } catch (markErr) {
+        console.warn('Falha ao registrar marcação de envio via mailto:', markErr)
+      }
+    }
     const link = reportEmailService.createMailToLink(emailTo, emailSubject, emailBody)
     window.location.href = link
   }
@@ -489,7 +530,7 @@ export default function ReportsPage() {
                   </div>
 
                   {/* Actions & Total */}
-                  <div className="flex items-center gap-4 justify-between md:justify-end border-t md:border-t-0 pt-3 md:pt-0 border-slate-100">
+                  <div className="flex items-center gap-4 justify-between md:justify-end border-t md:border-t-0 pt-3 md:pt-0 border-slate-100 flex-wrap">
                     <div className="text-right">
                       <span className="text-[11px] text-slate-400 block uppercase font-medium">
                         Valor Total
@@ -499,13 +540,24 @@ export default function ReportsPage() {
                       </div>
                     </div>
 
-                    <Button
-                      onClick={() => handleOpenPackageModal(trip)}
-                      className="bg-[#1e40af] hover:bg-[#1d3d9e] text-white text-xs gap-1.5 shadow-sm font-semibold h-9 px-3.5"
-                    >
-                      <Package className="w-4 h-4" />
-                      <span>Empacotar Relatório</span>
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => navigate(`/trips/${trip.id}`)}
+                        className="text-xs h-9 px-3 border-slate-200 text-slate-700 hover:bg-slate-50"
+                      >
+                        Ver Detalhes
+                      </Button>
+
+                      <Button
+                        onClick={() => handleOpenPackageModal(trip)}
+                        className="bg-[#1e40af] hover:bg-[#1d3d9e] text-white text-xs gap-1.5 shadow-sm font-semibold h-9 px-3.5"
+                      >
+                        <Package className="w-4 h-4" />
+                        <span>Empacotar Relatório</span>
+                      </Button>
+                    </div>
                   </div>
                 </CardContent>
               </Card>

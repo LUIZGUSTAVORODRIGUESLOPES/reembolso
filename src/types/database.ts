@@ -50,6 +50,20 @@ export interface Trip {
   motivo: string
   created_at: string
   user_profile?: Profile | null
+  // Rastreamento de envio do relatório
+  report_sent_at?: string | null
+  report_sent_to?: string | null
+  report_sent_by_id?: string | null
+  report_sent_by_name?: string | null
+  // Campos de quitação
+  settlement_date?: string | null // YYYY-MM-DD
+  settlement_amount?: number | null // Valor específico da viagem quitada
+  settlement_deposit_total?: number | null // Valor total do depósito (se conjunto)
+  settlement_batch_id?: string | null // UUID do lote se foi depósito conjunto
+  settlement_batch_count?: number | null // Quantidade de viagens quitadas juntas
+  settled_by_id?: string | null
+  settled_by_name?: string | null
+  settled_at?: string | null
 }
 
 export interface Expense {

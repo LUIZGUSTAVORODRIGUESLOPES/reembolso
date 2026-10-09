@@ -219,10 +219,19 @@ class SupabaseStorageService {
     sentTo: string,
     user?: { id: string; name: string } | null,
   ): Promise<Trip | null> {
+    // Buscar status atual da viagem para garantir que viagens não reembolsadas
+    // sejam promovidas para 'fechada', respeitando se já estiverem reembolsadas.
+    const currentTrip = await this.getTrip(tripId)
+
     const updates: Record<string, unknown> = {
       report_sent_at: new Date().toISOString(),
       report_sent_to: sentTo.trim(),
     }
+
+    if (currentTrip && currentTrip.status !== 'reembolsada') {
+      updates.status = 'fechada'
+    }
+
     if (user?.id && this.isValidUuid(user.id)) {
       updates.report_sent_by_id = user.id
     }
@@ -1290,6 +1299,16 @@ class SupabaseStorageService {
       }
     }
 
+    // Camada 3 de defesa: se report_sent_at estiver preenchido e status for 'em_triagem' ou 'com_pendencias',
+    // mapeia como 'fechada' em memória.
+    let effectiveStatus = row.status
+    if (
+      Boolean(row.report_sent_at) &&
+      (effectiveStatus === 'em_triagem' || effectiveStatus === 'com_pendencias')
+    ) {
+      effectiveStatus = 'fechada'
+    }
+
     return {
       id: String(row.id),
       user_id: row.user_id ? String(row.user_id) : '',
@@ -1297,7 +1316,7 @@ class SupabaseStorageService {
       start_date: String(row.start_date || ''),
       end_date: String(row.end_date || ''),
       transport_type: row.transport_type,
-      status: row.status,
+      status: effectiveStatus,
       total_amount: Number(row.total_amount || 0),
       notes: row.notes || '',
       motivo: String(row.motivo || ''),

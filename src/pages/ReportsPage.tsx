@@ -33,8 +33,10 @@ import {
   formatDateBR,
   formatDateRangeBR,
   normalizeSearchText,
-  CATEGORY_LABELS,
   TRIP_STATUS_CONFIG,
+  TRANSPORT_LABELS,
+  CATEGORY_LABELS,
+  getEffectiveTripStatus,
 } from '@/lib/formatters'
 import { TripPhaseToggle } from '@/components/TripPhaseToggle'
 import { TripPhase, getTripPhase, countTripsByPhase } from '@/lib/tripPhase'
@@ -685,7 +687,8 @@ export default function ReportsPage() {
           </div>
         ) : (
           filteredTrips.map((trip) => {
-            const statusConf = TRIP_STATUS_CONFIG[trip.status]
+            const effectiveStatus = getEffectiveTripStatus(trip)
+            const statusConf = TRIP_STATUS_CONFIG[effectiveStatus]
             return (
               <Card
                 key={trip.id}

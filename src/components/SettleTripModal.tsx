@@ -32,6 +32,7 @@ import {
   formatDateBR,
   formatDateRangeBR,
   TRIP_STATUS_CONFIG,
+  getEffectiveTripStatus,
 } from '@/lib/formatters'
 import { useToast } from '@/hooks/use-toast'
 
@@ -505,10 +506,12 @@ export function SettleTripModal({
                     {allEligibleTrips.map((t) => {
                       const isCurrent = t.id === currentTrip.id
                       const isSelected = selectedTripIds.includes(t.id)
-                      const isAuditadaOuFechada = t.status === 'auditada' || t.status === 'fechada'
+                      const effectiveStatus = getEffectiveTripStatus(t)
+                      const isAuditadaOuFechada =
+                        effectiveStatus === 'auditada' || effectiveStatus === 'fechada'
                       // Viagens em triagem ou com pendências não devem ser quitadas
                       const isAllowed = isAuditadaOuFechada || isCurrent
-                      const statusConf = TRIP_STATUS_CONFIG[t.status]
+                      const statusConf = TRIP_STATUS_CONFIG[effectiveStatus]
 
                       return (
                         <div

@@ -134,3 +134,42 @@ export const TRANSPORT_LABELS: Record<TransportType, string> = {
   carro_alugado: 'Carro Alugado',
   outros: 'Outros',
 }
+
+/**
+ * Retorna o status efetivo da viagem aplicando a regra de defesa de integridade:
+ * se report_sent_at preenchido e status em ('em_triagem','com_pendencias') → retorna 'fechada'.
+ */
+export function getEffectiveTripStatus(
+  trip: { status?: TripStatus | string | null; report_sent_at?: string | null } | null | undefined,
+): TripStatus {
+  if (!trip || !trip.status) return 'em_triagem'
+  const currentStatus = trip.status as TripStatus
+  if (
+    Boolean(trip.report_sent_at) &&
+    (currentStatus === 'em_triagem' || currentStatus === 'com_pendencias')
+  ) {
+    return 'fechada'
+  }
+  return currentStatus
+}
+
+/**
+ * Retorna o status efetivo de uma solicitação avulsa:
+ * se report_sent_at preenchido e status for 'em_triagem' → retorna 'empacotada'.
+ */
+export function getEffectiveStandaloneStatus(
+  req:
+    | {
+        status?: 'em_triagem' | 'empacotada' | 'quitada' | string | null
+        report_sent_at?: string | null
+      }
+    | null
+    | undefined,
+): 'em_triagem' | 'empacotada' | 'quitada' {
+  if (!req || !req.status) return 'em_triagem'
+  const current = req.status as 'em_triagem' | 'empacotada' | 'quitada'
+  if (Boolean(req.report_sent_at) && current === 'em_triagem') {
+    return 'empacotada'
+  }
+  return current
+}

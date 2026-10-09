@@ -68,7 +68,12 @@ import { reportEmailService } from '@/services/reportEmailService'
 import { showStandaloneRequestDeletedUndoToast } from '@/services/undoService'
 import { SettleStandaloneModal } from '@/components/SettleStandaloneModal'
 import { DocumentViewer } from '@/components/DocumentViewer'
-import { formatCurrencyBRL, formatDateBR, normalizeSearchText } from '@/lib/formatters'
+import {
+  formatCurrencyBRL,
+  formatDateBR,
+  normalizeSearchText,
+  getEffectiveStandaloneStatus,
+} from '@/lib/formatters'
 import { useAuth } from '@/hooks/use-auth'
 import { useToast } from '@/hooks/use-toast'
 
@@ -174,7 +179,8 @@ export default function SolicitacoesAvulsasPage() {
   const filteredRequests = useMemo(() => {
     const q = normalizeSearchText(searchQuery)
     return requests.filter((r) => {
-      if (statusFilter !== 'all' && r.status !== statusFilter) return false
+      const effStatus = getEffectiveStandaloneStatus(r)
+      if (statusFilter !== 'all' && effStatus !== statusFilter) return false
       if (!q) return true
 
       const desc = normalizeSearchText(r.description)
@@ -197,9 +203,13 @@ export default function SolicitacoesAvulsasPage() {
 
   // Contadores
   const counts = useMemo(() => {
-    const emTriagem = requests.filter((r) => r.status === 'em_triagem').length
-    const empacotada = requests.filter((r) => r.status === 'empacotada').length
-    const quitada = requests.filter((r) => r.status === 'quitada').length
+    const emTriagem = requests.filter(
+      (r) => getEffectiveStandaloneStatus(r) === 'em_triagem',
+    ).length
+    const empacotada = requests.filter(
+      (r) => getEffectiveStandaloneStatus(r) === 'empacotada',
+    ).length
+    const quitada = requests.filter((r) => getEffectiveStandaloneStatus(r) === 'quitada').length
     const totalAmount = requests.reduce((acc, r) => acc + (r.amount || 0), 0)
     return { emTriagem, empacotada, quitada, total: requests.length, totalAmount }
   }, [requests])
@@ -232,7 +242,7 @@ export default function SolicitacoesAvulsasPage() {
   }
 
   const handleOpenEditModal = (req: StandaloneRequest) => {
-    if (req.status !== 'em_triagem') {
+    if (getEffectiveStandaloneStatus(req) !== 'em_triagem') {
       toast({
         title: 'Edição bloqueada',
         description: 'Apenas solicitações com status "Em Triagem" podem ser editadas diretamente.',
@@ -494,7 +504,7 @@ export default function SolicitacoesAvulsasPage() {
     }
 
     const solName = req.user_profile?.full_name || profile?.full_name || 'Colaborador'
-    const isReenvio = req.status === 'empacotada'
+    const isReenvio = getEffectiveStandaloneStatus(req) === 'empacotada'
 
     setSelectedForEmail(req)
     setEmailRecipient(req.report_sent_to || 'financeiro@empresa.com.br')
@@ -591,10 +601,10 @@ export default function SolicitacoesAvulsasPage() {
 
   // Quitação
   const handleOpenSettleModal = (req: StandaloneRequest) => {
-    if (req.status !== 'empacotada') {
+    if (getEffectiveStandaloneStatus(req) !== 'empacotada') {
       toast({
-        title: 'Quitação indisponível',
-        description: 'A solicitação precisa ser enviada por e-mail antes de ser quitada.',
+        title: 'Quitação não permitida',
+        description: 'Apenas solicitações com status "Enviada" podem ser quitadas.',
         variant: 'destructive',
       })
       return
@@ -613,9 +623,9 @@ export default function SolicitacoesAvulsasPage() {
       })
       return
     }
-    if (req.status !== 'empacotada') {
+    if (getEffectiveStandaloneStatus(req) !== 'empacotada') {
       toast({
-        title: 'Reabertura indisponível',
+        title: 'Reabertura não permitida',
         description: 'Apenas solicitações com status "Enviada" podem ser reabertas.',
         variant: 'destructive',
       })
@@ -668,10 +678,10 @@ export default function SolicitacoesAvulsasPage() {
 
   // Exclusão com Desfazer
   const handlePromptDelete = (req: StandaloneRequest) => {
-    if (req.status !== 'em_triagem') {
+    if (getEffectiveStandaloneStatus(req) !== 'em_triagem') {
       toast({
-        title: 'Exclusão não permitida',
-        description: 'Não é permitido excluir uma solicitação já enviada ou quitada.',
+        title: 'Exclusão bloqueada',
+        description: 'Apenas solicitações em triagem podem ser excluídas.',
         variant: 'destructive',
       })
       return
@@ -897,9 +907,10 @@ export default function SolicitacoesAvulsasPage() {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredRequests.map((req) => {
-                  const isEmTriagem = req.status === 'em_triagem'
-                  const isEmpacotada = req.status === 'empacotada'
-                  const isQuitada = req.status === 'quitada'
+                  const effectiveStatus = getEffectiveStandaloneStatus(req)
+                  const isEmTriagem = effectiveStatus === 'em_triagem'
+                  const isEmpacotada = effectiveStatus === 'empacotada'
+                  const isQuitada = effectiveStatus === 'quitada'
 
                   return (
                     <tr key={req.id} className="hover:bg-slate-50/60 transition-colors">
@@ -1358,7 +1369,7 @@ export default function SolicitacoesAvulsasPage() {
               </div>
               <div>
                 <DialogTitle className="text-lg font-bold text-slate-900">
-                  {selectedForEmail?.status === 'empacotada'
+                  {getEffectiveStandaloneStatus(selectedForEmail) === 'empacotada'
                     ? 'Reenviar Solicitação por E-mail'
                     : 'Enviar Solicitação por E-mail'}
                 </DialogTitle>
@@ -1456,7 +1467,9 @@ export default function SolicitacoesAvulsasPage() {
               ) : (
                 <Send className="w-4 h-4" />
               )}
-              {selectedForEmail?.status === 'empacotada' ? 'Reenviar E-mail' : 'Enviar Relatório'}
+              {getEffectiveStandaloneStatus(selectedForEmail) === 'empacotada'
+                ? 'Reenviar E-mail'
+                : 'Enviar Relatório'}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -11,6 +11,12 @@ class StandaloneRequestService {
   }
 
   private mapRow(row: any): StandaloneRequest {
+    let rawStatus = (row.status || 'em_triagem') as StandaloneRequestStatus
+    // Camada 3 de defesa: se report_sent_at preenchido e status for 'em_triagem', promove para 'empacotada'
+    if (Boolean(row.report_sent_at) && rawStatus === 'em_triagem') {
+      rawStatus = 'empacotada'
+    }
+
     return {
       id: row.id,
       user_id: row.user_id,
@@ -25,7 +31,7 @@ class StandaloneRequestService {
       receipt_file_name: row.receipt_file_name || '',
       receipt_storage_path: row.receipt_storage_path || null,
       ocr_raw_text: row.ocr_raw_text || null,
-      status: (row.status || 'em_triagem') as StandaloneRequestStatus,
+      status: rawStatus,
       report_sent_at: row.report_sent_at || null,
       report_sent_to: row.report_sent_to || null,
       report_sent_by_id: row.report_sent_by_id || null,
@@ -209,11 +215,18 @@ class StandaloneRequestService {
     sentTo: string,
     user?: { id: string; name: string } | null,
   ): Promise<StandaloneRequest | null> {
+    // Buscar status atual para não rebaixar solicitações já 'quitadas'
+    const current = await this.getRequest(id)
+
     const updates: Record<string, unknown> = {
-      status: 'empacotada',
       report_sent_at: new Date().toISOString(),
       report_sent_to: sentTo.trim(),
     }
+
+    if (!current || current.status !== 'quitada') {
+      updates.status = 'empacotada'
+    }
+
     if (user?.id && this.isValidUuid(user.id)) {
       updates.report_sent_by_id = user.id
     }

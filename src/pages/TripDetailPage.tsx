@@ -58,6 +58,7 @@ import {
   CATEGORY_COLORS,
   TRIP_STATUS_CONFIG,
   TRANSPORT_LABELS,
+  getEffectiveTripStatus,
 } from '@/lib/formatters'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -948,8 +949,9 @@ export default function TripDetailPage() {
     (r) => r.status === 'pass' || r.status === 'justified',
   ).length
   const auditPercent = totalRules > 0 ? Math.round((passedRules / totalRules) * 100) : 100
-  const statusConf = TRIP_STATUS_CONFIG[trip.status]
-  const isTripLocked = storageService.isTripLocked(trip.status)
+  const effectiveStatus = getEffectiveTripStatus(trip)
+  const statusConf = TRIP_STATUS_CONFIG[effectiveStatus]
+  const isTripLocked = storageService.isTripLocked(effectiveStatus)
 
   // Manual Audit Progress (conferência humana de cada lançamento)
   const totalExpenses = expenses.length
@@ -962,7 +964,7 @@ export default function TripDetailPage() {
   return (
     <div className="space-y-6">
       {/* Banner Informativo de Imutabilidade / Governança */}
-      {trip.status === 'reembolsada' ? (
+      {effectiveStatus === 'reembolsada' ? (
         <div
           role="alert"
           className="bg-emerald-50 border-2 border-emerald-300 rounded-xl p-4 sm:p-4.5 text-emerald-950 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-fade-in"
@@ -1084,7 +1086,7 @@ export default function TripDetailPage() {
       ) : null}
 
       {/* Banner Informativo Discreto de Viagem Reaberta */}
-      {trip.reopened_at && trip.status === 'em_triagem' && (
+      {trip.reopened_at && effectiveStatus === 'em_triagem' && (
         <div
           role="status"
           className="bg-blue-50/70 border border-blue-200/80 rounded-lg p-3 text-blue-900 text-xs flex items-start sm:items-center justify-between gap-3 animate-fade-in"
@@ -1244,7 +1246,7 @@ export default function TripDetailPage() {
           </Button>
 
           {/* Botão Reabrir Viagem para Admin (quando auditada ou fechada) */}
-          {isAdmin && (trip.status === 'auditada' || trip.status === 'fechada') && (
+          {isAdmin && (effectiveStatus === 'auditada' || effectiveStatus === 'fechada') && (
             <Button
               size="sm"
               variant="outline"
@@ -1260,7 +1262,7 @@ export default function TripDetailPage() {
           )}
 
           {/* Botão Quitar Viagem: liberado quando relatório enviado por e-mail e viagem ainda não reembolsada */}
-          {trip.status !== 'reembolsada' &&
+          {effectiveStatus !== 'reembolsada' &&
             (trip.report_sent_at ? (
               <Button
                 size="sm"
@@ -1270,7 +1272,7 @@ export default function TripDetailPage() {
                 <DollarSign className="w-4 h-4" />
                 <span>Quitar Viagem</span>
               </Button>
-            ) : trip.status === 'auditada' || trip.status === 'fechada' ? (
+            ) : effectiveStatus === 'auditada' || effectiveStatus === 'fechada' ? (
               <Button
                 size="sm"
                 variant="outline"
@@ -1312,7 +1314,7 @@ export default function TripDetailPage() {
                 {statusConf.label}
               </span>
 
-              {trip.status === 'reembolsada' && trip.settlement_date && (
+              {effectiveStatus === 'reembolsada' && trip.settlement_date && (
                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">
                   <CheckCircle2 className="w-3 h-3 text-emerald-600" />
                   <span>Quitada em {formatDateBR(trip.settlement_date)}</span>
@@ -2657,9 +2659,8 @@ export default function TripDetailPage() {
             <AlertDialogDescription className="text-slate-600 text-xs sm:text-sm space-y-3 pt-1">
               <p>
                 A viagem para <strong className="text-slate-900">{trip.destination}</strong> voltará
-                do status{' '}
-                <strong className="text-amber-800">{TRIP_STATUS_CONFIG[trip.status].label}</strong>{' '}
-                para <strong className="text-blue-700">Em Triagem</strong>.
+                do status <strong className="text-amber-800">{statusConf.label}</strong> para{' '}
+                <strong className="text-blue-700">Em Triagem</strong>.
               </p>
 
               <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-950 space-y-1.5 leading-relaxed">

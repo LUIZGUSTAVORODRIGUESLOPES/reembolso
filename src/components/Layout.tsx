@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 import { storageService } from '@/services/storageService'
 import { userService } from '@/services/userService'
+import { reminderTriggerService } from '@/services/reminderTriggerService'
 import { useToast } from '@/hooks/use-toast'
 import { useAuth } from '@/hooks/use-auth'
 import { Button } from '@/components/ui/button'
@@ -146,6 +147,16 @@ export default function Layout() {
     const interval = setInterval(refreshAlertCount, 4000)
     return () => clearInterval(interval)
   }, [])
+
+  // Gatilho de checagem diária automática em segundo plano
+  // Se o usuário logado for administrador, aciona a edge function check-unsent-trip-reminders
+  // Executa no máximo uma vez por dia por dispositivo (cooldown ~20h via localStorage)
+  // Totalmente silencioso em segundo plano (apenas console.warn se houver falha de rede)
+  useEffect(() => {
+    if (isAdmin) {
+      reminderTriggerService.runDailyBackgroundCheckIfAdmin(true)
+    }
+  }, [isAdmin])
 
   // Close mobile sidebar on route change
   useEffect(() => {

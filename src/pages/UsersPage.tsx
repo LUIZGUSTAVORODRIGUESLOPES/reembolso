@@ -22,6 +22,7 @@ import {
 } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import { userService } from '@/services/userService'
+import { reminderTriggerService } from '@/services/reminderTriggerService'
 import { Profile, UserRole } from '@/types/database'
 import { useAuth } from '@/hooks/use-auth'
 import { useToast } from '@/hooks/use-toast'
@@ -87,6 +88,7 @@ export default function UsersPage() {
   const [alertDays, setAlertDays] = useState<number>(5)
   const [savingAlertConfig, setSavingAlertConfig] = useState(false)
   const [testingAlerts, setTestingAlerts] = useState(false)
+  const [executingRealAlerts, setExecutingRealAlerts] = useState(false)
 
   const loadUsers = async () => {
     try {
@@ -310,20 +312,79 @@ export default function UsersPage() {
     try {
       setTestingAlerts(true)
       const res = await userService.triggerReminderCheck({ dryRun: true })
-      toast({
-        title: 'Checagem de lembretes simulada (Dry-Run)',
-        description: `Viagens avaliadas: ${res?.evaluatedCount ?? 0} | Alertas devidos: ${
-          res?.dueRemindersCount ?? res?.dueReminders?.length ?? 0
-        }`,
-      })
+      const dueCount = res?.dueRemindersCount ?? res?.dueReminders?.length ?? 0
+      const evaluated = res?.evaluatedCount ?? res?.evaluatedTripsCount ?? 0
+
+      if (dueCount === 0) {
+        toast({
+          title: 'Simulação concluída',
+          description: `Nenhuma viagem pendente atingiu o prazo de alerta (${evaluated} viagem(ns) avaliada(s)).`,
+        })
+      } else {
+        toast({
+          title: 'Checagem simulada (Dry-Run)',
+          description: `${dueCount} lembrete(s) devido(s) encontrado(s) de um total de ${evaluated} viagem(ns) avaliada(s). Nenhum e-mail foi enviado.`,
+        })
+      }
     } catch (err: any) {
       toast({
         title: 'Erro na checagem de lembretes',
-        description: err?.message || 'Falha ao executar a edge function.',
+        description: err?.message || 'Falha ao executar a simulação.',
         variant: 'destructive',
       })
     } finally {
       setTestingAlerts(false)
+    }
+  }
+
+  const handleExecuteRealReminderCheck = async () => {
+    try {
+      setExecutingRealAlerts(true)
+      const res = await userService.triggerReminderCheck({ dryRun: false })
+
+      // Atualiza timestamp local de checagem
+      reminderTriggerService.recordCheckTimestamp()
+
+      const sentCount = res?.remindersSent ?? 0
+      const dueCount = res?.dueRemindersCount ?? 0
+
+      if (res?.configured === false) {
+        toast({
+          title: 'Provedor de e-mail não configurado',
+          description:
+            res.message || 'A chave RESEND_API_KEY não foi configurada nos segredos do Supabase.',
+          variant: 'destructive',
+        })
+        return
+      }
+
+      if (sentCount > 0) {
+        toast({
+          title: 'Checagem de lembretes concluída!',
+          description: `${sentCount} e-mail(s) de lembrete enviado(s) com sucesso para colaboradores com viagens pendentes.`,
+        })
+      } else if (dueCount === 0) {
+        toast({
+          title: 'Nenhuma viagem pendente',
+          description:
+            'Todas as viagens finalizadas estão em dia ou com relatórios já enviados. Nenhum lembrete foi necessário.',
+        })
+      } else {
+        toast({
+          title: 'Checagem concluída',
+          description:
+            res?.message ||
+            'Nenhum novo lembrete foi enviado (viagens já alertadas anteriormente).',
+        })
+      }
+    } catch (err: any) {
+      toast({
+        title: 'Erro ao executar checagem',
+        description: err?.message || 'Falha ao disparar a edge function de lembretes.',
+        variant: 'destructive',
+      })
+    } finally {
+      setExecutingRealAlerts(false)
     }
   }
 
@@ -368,13 +429,29 @@ export default function UsersPage() {
             variant="outline"
             size="sm"
             onClick={handleTriggerTestReminder}
-            disabled={testingAlerts || loading}
+            disabled={testingAlerts || executingRealAlerts || loading}
             title="Simula a checagem diária de viagens não enviadas sem enviar e-mails reais (Dry Run)"
             className="text-xs h-9 gap-1.5 text-blue-700 border-blue-200 hover:bg-blue-50"
           >
             <Clock className={`w-3.5 h-3.5 ${testingAlerts ? 'animate-spin' : 'text-blue-600'}`} />
             <span className="hidden sm:inline">Simular Checagem de Alertas</span>
             <span className="sm:hidden">Simular</span>
+          </Button>
+
+          {/* Executar checagem agora (modo real) */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExecuteRealReminderCheck}
+            disabled={executingRealAlerts || testingAlerts || loading}
+            title="Executa a checagem diária real agora e envia e-mails de lembrete para viagens pendentes que atingiram o prazo configurado"
+            className="text-xs h-9 gap-1.5 text-amber-700 border-amber-200 hover:bg-amber-50"
+          >
+            <BellRing
+              className={`w-3.5 h-3.5 ${executingRealAlerts ? 'animate-spin text-amber-600' : 'text-amber-600'}`}
+            />
+            <span className="hidden sm:inline">Executar checagem agora</span>
+            <span className="sm:hidden">Checar agora</span>
           </Button>
 
           <Button

@@ -717,6 +717,18 @@ export default function TripDetailPage() {
 
     // Se já está travada, só permite alterar o status (se for para um novo status)
     // Destination e motivo são mantidos inalterados
+    // Gatekeeping: impedir fechamento manual ou reembolso se houver comprovantes pendentes
+    if ((editStatus === 'fechada' || editStatus === 'reembolsada') && hasPendingExpenses) {
+      toast({
+        title: 'Bloqueio de Fechamento',
+        description: gatekeepingTooltipMsg,
+        variant: 'destructive',
+      })
+      return
+    }
+
+    // Se já está travada, só permite alterar o status (se for para um novo status)
+    // Destination e motivo são mantidos inalterados
     const payload: { destination?: string; motivo?: string; status: TripStatus } = {
       status: editStatus,
     }
@@ -751,6 +763,14 @@ export default function TripDetailPage() {
   // Exportação direta para Excel a partir de TripDetailPage
   const handleExportExcelDirect = () => {
     if (!trip) return
+    if (hasPendingExpenses) {
+      toast({
+        title: 'Exportação Bloqueada',
+        description: gatekeepingTooltipMsg,
+        variant: 'destructive',
+      })
+      return
+    }
     try {
       exportTripToExcel(trip, expenses)
       toast({
@@ -770,6 +790,14 @@ export default function TripDetailPage() {
   // Exportação direta para PDF Consolidado com rasterização dos comprovantes e progresso
   const handleExportPdfDirect = async () => {
     if (!trip || generatingPdf) return
+    if (hasPendingExpenses) {
+      toast({
+        title: 'Exportação Bloqueada',
+        description: gatekeepingTooltipMsg,
+        variant: 'destructive',
+      })
+      return
+    }
     setGeneratingPdf(true)
     setPdfProgressText('Iniciando processamento dos comprovantes...')
 
@@ -810,6 +838,14 @@ export default function TripDetailPage() {
   // Abertura do modal de e-mail na TripDetailPage
   const handleOpenTripEmailModal = () => {
     if (!trip) return
+    if (hasPendingExpenses) {
+      toast({
+        title: 'Envio Bloqueado',
+        description: gatekeepingTooltipMsg,
+        variant: 'destructive',
+      })
+      return
+    }
     const collaboratorName =
       trip.user_profile?.full_name ||
       profile?.full_name ||
@@ -1022,8 +1058,59 @@ export default function TripDetailPage() {
   const checkedExpensesPercent =
     totalExpenses > 0 ? Math.round((checkedExpensesCount / totalExpenses) * 100) : 0
 
+  // Gatekeeping rigoroso: se houver ao menos um recibo com audit_manual_checked = false
+  // ou audit_status = 'pendente' (ou sem despesas), as ações de exportação, envio e quitação/fechamento ficam bloqueadas.
+  const hasPendingExpenses =
+    totalExpenses === 0 ||
+    expenses.some(
+      (e) =>
+        e.audit_manual_checked !== true || e.audit_status === 'pendente' || e.is_verified === false,
+    )
+  const gatekeepingTooltipMsg =
+    'Complete a conferência de todos os recibos pendentes na Triagem para liberar o envio.'
+
   return (
     <div className="space-y-6">
+      {/* Card Vermelho de Alerta de Bloqueio por Gatekeeping (quando houver recibos pendentes) */}
+      {hasPendingExpenses && effectiveStatus !== 'reembolsada' && (
+        <div
+          role="alert"
+          className="bg-rose-50 border-2 border-rose-300 rounded-xl p-4 sm:p-4.5 text-rose-950 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-fade-in"
+        >
+          <div className="flex items-start sm:items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-rose-200/80 text-rose-900 flex items-center justify-center shrink-0">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div className="space-y-0.5">
+              <h3 className="font-bold text-sm sm:text-base text-rose-950 flex items-center gap-2">
+                <span>⚠️ Gatekeeping: Ações de Envio e Quitação Bloqueadas</span>
+                <Badge className="bg-rose-200 text-rose-900 text-[10px] font-bold border-none">
+                  Conferência Pendente ({checkedExpensesCount}/{totalExpenses})
+                </Badge>
+              </h3>
+              <p className="text-xs text-rose-800 leading-relaxed">
+                Complete a conferência de todos os recibos pendentes na Triagem para liberar o
+                envio.
+                {totalExpenses > 0 && (
+                  <span className="font-semibold block sm:inline sm:ml-1">
+                    Restam {totalExpenses - checkedExpensesCount} comprovante(s) aguardando OK
+                    humano do auditor.
+                  </span>
+                )}
+              </p>
+            </div>
+          </div>
+          <Button
+            size="sm"
+            onClick={() => navigate('/triage')}
+            className="bg-rose-700 hover:bg-rose-800 text-white text-xs font-semibold shrink-0 gap-1.5 shadow-xs w-full sm:w-auto"
+          >
+            <ShieldCheck className="w-3.5 h-3.5" />
+            <span>Ir para Triagem</span>
+          </Button>
+        </div>
+      )}
+
       {/* Banner Informativo de Imutabilidade / Governança */}
       {effectiveStatus === 'reembolsada' ? (
         <div
@@ -1231,80 +1318,86 @@ export default function TripDetailPage() {
           </Button>
 
           {/* Exportação Direta de Relatório: PDF Consolidado e Planilha Excel */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={generatingPdf}
-                className="text-xs gap-1.5 shadow-sm font-semibold text-slate-700 border-slate-300 hover:bg-slate-50"
-              >
-                {generatingPdf ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
-                ) : (
-                  <Download className="w-3.5 h-3.5 text-blue-600" />
-                )}
-                <span>{generatingPdf ? 'Gerando PDF...' : 'Exportar Relatório'}</span>
-                <ChevronDown className="w-3 h-3 text-slate-400" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-64">
-              <DropdownMenuLabel className="text-xs font-semibold text-slate-600">
-                Baixar arquivos diretamente
-              </DropdownMenuLabel>
-              <DropdownMenuItem
-                onClick={handleExportPdfDirect}
-                disabled={generatingPdf}
-                className="cursor-pointer gap-2 py-2 text-xs"
-              >
-                <FileText className="w-4 h-4 text-rose-600 shrink-0" />
-                <div className="flex flex-col text-left">
-                  <span className="font-semibold text-slate-900">Exportar PDF Consolidado</span>
-                  <span className="text-[10px] text-slate-500">
-                    Com capa, auditoria e comprovantes
-                  </span>
-                </div>
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={handleExportExcelDirect}
-                className="cursor-pointer gap-2 py-2 text-xs"
-              >
-                <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
-                <div className="flex flex-col text-left">
-                  <span className="font-semibold text-slate-900">Exportar Planilha Excel</span>
-                  <span className="text-[10px] text-slate-500">
-                    Tabela estruturada (.csv/Excel)
-                  </span>
-                </div>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                onClick={() => navigate('/reports')}
-                className="cursor-pointer gap-2 py-2 text-xs text-slate-600"
-              >
-                <ArrowLeft className="w-3.5 h-3.5 rotate-180 shrink-0 text-slate-400" />
-                <span className="text-slate-700 font-medium">Ver Central de Relatórios</span>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <div title={hasPendingExpenses ? gatekeepingTooltipMsg : undefined}>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={generatingPdf || hasPendingExpenses}
+                  className="text-xs gap-1.5 shadow-sm font-semibold text-slate-700 border-slate-300 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {generatingPdf ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                  ) : (
+                    <Download className="w-3.5 h-3.5 text-blue-600" />
+                  )}
+                  <span>{generatingPdf ? 'Gerando PDF...' : 'Exportar Relatório'}</span>
+                  <ChevronDown className="w-3 h-3 text-slate-400" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-64">
+                <DropdownMenuLabel className="text-xs font-semibold text-slate-600">
+                  Baixar arquivos diretamente
+                </DropdownMenuLabel>
+                <DropdownMenuItem
+                  onClick={handleExportPdfDirect}
+                  disabled={generatingPdf || hasPendingExpenses}
+                  className="cursor-pointer gap-2 py-2 text-xs"
+                >
+                  <FileText className="w-4 h-4 text-rose-600 shrink-0" />
+                  <div className="flex flex-col text-left">
+                    <span className="font-semibold text-slate-900">Exportar PDF Consolidado</span>
+                    <span className="text-[10px] text-slate-500">
+                      Com capa, auditoria e comprovantes
+                    </span>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={handleExportExcelDirect}
+                  disabled={hasPendingExpenses}
+                  className="cursor-pointer gap-2 py-2 text-xs"
+                >
+                  <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <div className="flex flex-col text-left">
+                    <span className="font-semibold text-slate-900">Exportar Planilha Excel</span>
+                    <span className="text-[10px] text-slate-500">
+                      Tabela estruturada (.csv/Excel)
+                    </span>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => navigate('/reports')}
+                  className="cursor-pointer gap-2 py-2 text-xs text-slate-600"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5 rotate-180 shrink-0 text-slate-400" />
+                  <span className="text-slate-700 font-medium">Ver Central de Relatórios</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
 
           {/* Botão Enviar / Reenviar Relatório por E-mail (Gatilho Autônomo e Separado) */}
-          <Button
-            size="sm"
-            onClick={handleOpenTripEmailModal}
-            className={`text-xs gap-1.5 shadow-sm font-semibold text-white ${
-              trip.report_sent_at
-                ? 'bg-blue-700 hover:bg-blue-800'
-                : 'bg-[#1e40af] hover:bg-[#1d3d9e]'
-            }`}
-          >
-            {trip.report_sent_at ? (
-              <RotateCcw className="w-3.5 h-3.5" />
-            ) : (
-              <Mail className="w-3.5 h-3.5" />
-            )}
-            <span>{trip.report_sent_at ? 'Reenviar por E-mail' : 'Enviar por E-mail'}</span>
-          </Button>
+          <div title={hasPendingExpenses ? gatekeepingTooltipMsg : undefined}>
+            <Button
+              size="sm"
+              onClick={handleOpenTripEmailModal}
+              disabled={hasPendingExpenses}
+              className={`text-xs gap-1.5 shadow-sm font-semibold text-white disabled:opacity-50 disabled:cursor-not-allowed ${
+                trip.report_sent_at
+                  ? 'bg-blue-700 hover:bg-blue-800'
+                  : 'bg-[#1e40af] hover:bg-[#1d3d9e]'
+              }`}
+            >
+              {trip.report_sent_at ? (
+                <RotateCcw className="w-3.5 h-3.5" />
+              ) : (
+                <Mail className="w-3.5 h-3.5" />
+              )}
+              <span>{trip.report_sent_at ? 'Reenviar por E-mail' : 'Enviar por E-mail'}</span>
+            </Button>
+          </div>
 
           {/* Botão Reabrir Viagem para Admin (quando auditada ou fechada) */}
           {isAdmin && (effectiveStatus === 'auditada' || effectiveStatus === 'fechada') && (
@@ -1325,25 +1418,30 @@ export default function TripDetailPage() {
           {/* Botão Quitar Viagem: liberado quando relatório enviado por e-mail e viagem ainda não reembolsada */}
           {effectiveStatus !== 'reembolsada' &&
             (trip.report_sent_at ? (
-              <Button
-                size="sm"
-                onClick={() => setSettleModalOpen(true)}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs gap-1.5 shadow-sm font-bold animate-pulse hover:animate-none"
-              >
-                <DollarSign className="w-4 h-4" />
-                <span>Quitar Viagem</span>
-              </Button>
+              <div title={hasPendingExpenses ? gatekeepingTooltipMsg : undefined}>
+                <Button
+                  size="sm"
+                  onClick={() => setSettleModalOpen(true)}
+                  disabled={hasPendingExpenses}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs gap-1.5 shadow-sm font-bold animate-pulse hover:animate-none disabled:opacity-50 disabled:cursor-not-allowed disabled:animate-none"
+                >
+                  <DollarSign className="w-4 h-4" />
+                  <span>Quitar Viagem</span>
+                </Button>
+              </div>
             ) : effectiveStatus === 'auditada' || effectiveStatus === 'fechada' ? (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setSettleModalOpen(true)}
-                className="text-xs gap-1.5 text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 border-emerald-300 font-semibold"
-                title="Quitar viagem (disponível para viagens auditadas ou fechadas)"
-              >
-                <DollarSign className="w-4 h-4" />
-                <span>Quitar Viagem</span>
-              </Button>
+              <div title={hasPendingExpenses ? gatekeepingTooltipMsg : undefined}>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setSettleModalOpen(true)}
+                  disabled={hasPendingExpenses}
+                  className="text-xs gap-1.5 text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 border-emerald-300 font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <DollarSign className="w-4 h-4" />
+                  <span>Quitar Viagem</span>
+                </Button>
+              </div>
             ) : null)}
         </div>
       </div>
@@ -2622,6 +2720,7 @@ export default function TripDetailPage() {
           open={settleModalOpen}
           onOpenChange={setSettleModalOpen}
           currentTrip={trip}
+          expenses={expenses}
           user={
             user
               ? {

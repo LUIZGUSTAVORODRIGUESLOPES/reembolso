@@ -82,7 +82,7 @@ export function SettleTripModal({
   // Confirmation/saving state
   const [submitting, setSubmitting] = useState(false)
 
-  // Estado de carregamento das despesas da viagem atual (caso não passadas por props)
+  // Estado de carregamento das despesas da viagem atual (inicializa com expenses || [])
   const [tripExpensesList, setTripExpensesList] = useState<
     Array<{
       is_verified?: boolean | null
@@ -139,7 +139,7 @@ export function SettleTripModal({
     try {
       const [trips, allExps] = await Promise.all([
         storageService.listTrips(),
-        storageService.listAllExpenses().catch(() => []),
+        storageService.listExpenses().catch(() => []),
       ])
 
       // Mapear pendências por trip_id

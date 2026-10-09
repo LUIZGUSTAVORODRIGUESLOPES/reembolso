@@ -57,6 +57,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { useToast } from '@/hooks/use-toast'
+import { showTripDeletedUndoToast } from '@/services/undoService'
 import { useAuth } from '@/hooks/use-auth'
 
 export default function Index() {
@@ -203,15 +204,23 @@ export default function Index() {
 
   const confirmDeleteTrip = async () => {
     if (!tripToDelete) return
+    const currentTripSnapshot = { ...tripToDelete }
     setIsDeletingTrip(true)
     try {
-      await storageService.deleteTrip(tripToDelete.id)
-      toast({
-        title: 'Viagem excluída',
-        description: `A viagem para ${tripToDelete.destination} e todos os comprovantes vinculados foram removidos com sucesso.`,
-      })
+      // Carrega despesas em memória antes da exclusão para permitir restauração completa
+      const attachedExpenses = await storageService.listExpenses(currentTripSnapshot.id)
+
+      await storageService.deleteTrip(currentTripSnapshot.id, false)
       setTripToDelete(null)
       loadData()
+
+      showTripDeletedUndoToast({
+        trip: currentTripSnapshot,
+        expenses: attachedExpenses,
+        onRestored: () => {
+          loadData()
+        },
+      })
     } catch (err: any) {
       toast({
         title: 'Exclusão não permitida',
@@ -723,8 +732,9 @@ export default function Index() {
               <div className="bg-rose-50 border border-rose-200 rounded-lg p-3 text-rose-800 text-xs space-y-1">
                 <p className="font-semibold">⚠️ Exclusão em cascata:</p>
                 <p>
-                  Todas as despesas associadas e os respectivos arquivos de comprovantes fiscais
-                  (PDFs e imagens) no bucket de armazenamento serão excluídos permanentemente.
+                  Todas as despesas associadas a esta viagem serão excluídas. Você terá{' '}
+                  <strong>10 segundos</strong> após a exclusão para desfazer a ação pelo aviso na
+                  tela.
                 </p>
               </div>
             </AlertDialogDescription>

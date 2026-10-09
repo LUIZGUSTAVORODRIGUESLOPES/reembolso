@@ -38,6 +38,17 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Label } from '@/components/ui/label'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { showUserStatusUndoToast } from '@/services/undoService'
 
 export default function UsersPage() {
   const { user: currentUser, loading: authLoading } = useAuth()
@@ -57,6 +68,10 @@ export default function UsersPage() {
 
   // Edit / Action state
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null)
+
+  // Confirmation dialogs
+  const [userToToggleStatus, setUserToToggleStatus] = useState<Profile | null>(null)
+  const [userToToggleRole, setUserToToggleRole] = useState<Profile | null>(null)
 
   const loadUsers = async () => {
     try {
@@ -141,32 +156,22 @@ export default function UsersPage() {
     }
   }
 
-  const handleToggleRole = async (targetUser: Profile) => {
-    if (targetUser.id === currentUser?.id) {
-      toast({
-        title: 'Operação não permitida',
-        description: 'Você não pode alterar seu próprio papel de administrador.',
-        variant: 'destructive',
-      })
-      return
-    }
-
+  const confirmToggleRole = async () => {
+    if (!userToToggleRole) return
+    const targetUser = userToToggleRole
     const newRole: UserRole = targetUser.role === 'admin' ? 'solicitante' : 'admin'
-    const confirmChange = window.confirm(
-      `Deseja alterar o papel de "${targetUser.full_name}" para ${
-        newRole === 'admin' ? 'Administrador' : 'Solicitante'
-      }?`,
-    )
-    if (!confirmChange) return
 
     try {
       setActionLoadingId(targetUser.id)
       await userService.updateUser(targetUser.id, { role: newRole })
       toast({
         title: 'Papel atualizado!',
-        description: `Usuário agora é ${newRole === 'admin' ? 'Administrador' : 'Solicitante'}.`,
+        description: `O colaborador "${targetUser.full_name}" agora é ${
+          newRole === 'admin' ? 'Administrador' : 'Solicitante'
+        }.`,
       })
       setUsers((prev) => prev.map((u) => (u.id === targetUser.id ? { ...u, role: newRole } : u)))
+      setUserToToggleRole(null)
     } catch (err: any) {
       toast({
         title: 'Falha ao atualizar papel',
@@ -178,34 +183,29 @@ export default function UsersPage() {
     }
   }
 
-  const handleToggleActive = async (targetUser: Profile) => {
-    if (targetUser.id === currentUser?.id) {
-      toast({
-        title: 'Operação não permitida',
-        description: 'Você não pode desativar seu próprio acesso.',
-        variant: 'destructive',
-      })
-      return
-    }
-
-    const newStatus = !targetUser.is_active
-    const confirmChange = window.confirm(
-      `Deseja realmente ${newStatus ? 'reativar' : 'desativar'} o acesso de "${
-        targetUser.full_name
-      }"? As viagens já lançadas continuarão vinculadas ao colaborador.`,
-    )
-    if (!confirmChange) return
+  const confirmToggleActive = async () => {
+    if (!userToToggleStatus) return
+    const targetUser = userToToggleStatus
+    const previousActive = targetUser.is_active
+    const newStatus = !previousActive
 
     try {
       setActionLoadingId(targetUser.id)
       await userService.updateUser(targetUser.id, { is_active: newStatus })
-      toast({
-        title: newStatus ? 'Usuário reativado!' : 'Usuário desativado!',
-        description: `O acesso à plataforma foi ${newStatus ? 'liberado' : 'bloqueado'}.`,
-      })
+      setUserToToggleStatus(null)
+
       setUsers((prev) =>
         prev.map((u) => (u.id === targetUser.id ? { ...u, is_active: newStatus } : u)),
       )
+
+      // Toast com botão Desfazer para reverter o status de ativação
+      showUserStatusUndoToast({
+        user: targetUser,
+        previousActiveState: previousActive,
+        onReverted: (reverted) => {
+          setUsers((prev) => prev.map((u) => (u.id === reverted.id ? reverted : u)))
+        },
+      })
     } catch (err: any) {
       toast({
         title: 'Falha ao alterar status',
@@ -215,6 +215,30 @@ export default function UsersPage() {
     } finally {
       setActionLoadingId(null)
     }
+  }
+
+  const handleToggleRoleClick = (targetUser: Profile) => {
+    if (targetUser.id === currentUser?.id) {
+      toast({
+        title: 'Operação não permitida',
+        description: 'Você não pode alterar seu próprio papel de administrador.',
+        variant: 'destructive',
+      })
+      return
+    }
+    setUserToToggleRole(targetUser)
+  }
+
+  const handleToggleActiveClick = (targetUser: Profile) => {
+    if (targetUser.id === currentUser?.id) {
+      toast({
+        title: 'Operação não permitida',
+        description: 'Você não pode desativar seu próprio acesso.',
+        variant: 'destructive',
+      })
+      return
+    }
+    setUserToToggleStatus(targetUser)
   }
 
   const filteredUsers = users.filter((u) => {
@@ -419,7 +443,7 @@ export default function UsersPage() {
                               variant="outline"
                               size="sm"
                               disabled={isSelf || isRowBusy}
-                              onClick={() => handleToggleRole(item)}
+                              onClick={() => handleToggleRoleClick(item)}
                               title={
                                 item.role === 'admin'
                                   ? 'Rebaixar para Solicitante'
@@ -434,7 +458,7 @@ export default function UsersPage() {
                               variant="outline"
                               size="sm"
                               disabled={isSelf || isRowBusy}
-                              onClick={() => handleToggleActive(item)}
+                              onClick={() => handleToggleActiveClick(item)}
                               className={`h-7 text-[11px] px-2.5 border-slate-200 ${
                                 item.is_active
                                   ? 'text-red-600 hover:text-red-700 hover:bg-red-50'
@@ -576,6 +600,97 @@ export default function UsersPage() {
           </form>
         </DialogContent>
       </Dialog>
+
+      {/* Confirmation Dialog: Desativar / Reativar Colaborador */}
+      <AlertDialog
+        open={Boolean(userToToggleStatus)}
+        onOpenChange={(open) => !open && setUserToToggleStatus(null)}
+      >
+        <AlertDialogContent className="sm:max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-slate-900 text-base">
+              {userToToggleStatus?.is_active
+                ? 'Desativar acesso do colaborador?'
+                : 'Reativar acesso do colaborador?'}
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-xs text-slate-600 space-y-2">
+              <p>
+                Colaborador: <strong>{userToToggleStatus?.full_name}</strong> (
+                {userToToggleStatus?.email})
+              </p>
+              {userToToggleStatus?.is_active ? (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-amber-900 text-xs space-y-1">
+                  <p className="font-semibold">O que acontece ao desativar:</p>
+                  <ul className="list-disc list-inside space-y-0.5 text-amber-800">
+                    <li>O colaborador não poderá mais fazer login no sistema.</li>
+                    <li>
+                      As viagens e despesas já vinculadas continuam preservadas para auditoria.
+                    </li>
+                    <li>
+                      Você poderá <strong>desfazer esta ação imediatamente</strong> através do aviso
+                      na tela.
+                    </li>
+                  </ul>
+                </div>
+              ) : (
+                <p>
+                  O colaborador voltará a ter acesso ao sistema conforme o seu perfil cadastrado.
+                </p>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="text-xs">Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmToggleActive}
+              className={`text-xs ${
+                userToToggleStatus?.is_active
+                  ? 'bg-red-600 hover:bg-red-700 text-white'
+                  : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+              }`}
+            >
+              {userToToggleStatus?.is_active ? 'Sim, Desativar' : 'Sim, Reativar'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Confirmation Dialog: Alterar Papel / Permissões */}
+      <AlertDialog
+        open={Boolean(userToToggleRole)}
+        onOpenChange={(open) => !open && setUserToToggleRole(null)}
+      >
+        <AlertDialogContent className="sm:max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-slate-900 text-base">
+              Alterar papel do colaborador?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-xs text-slate-600 space-y-2">
+              <p>
+                Deseja alterar o perfil de <strong>"{userToToggleRole?.full_name}"</strong> para{' '}
+                <strong>
+                  {userToToggleRole?.role === 'admin' ? 'Solicitante' : 'Administrador'}
+                </strong>
+                ?
+              </p>
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-slate-700 text-xs">
+                {userToToggleRole?.role === 'admin'
+                  ? 'O colaborador perderá privilégios administrativos e só terá acesso às próprias viagens.'
+                  : 'O colaborador terá acesso completo a relatórios corporativos, aprovações e gestão de viagens de toda a equipe.'}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="text-xs">Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmToggleRole}
+              className="text-xs bg-[#1e40af] hover:bg-[#1d3d9e] text-white"
+            >
+              Confirmar Alteração
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

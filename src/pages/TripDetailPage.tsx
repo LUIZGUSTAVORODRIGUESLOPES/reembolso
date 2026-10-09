@@ -76,6 +76,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/hooks/use-toast'
+import { showExpenseDeletedUndoToast, showTripDeletedUndoToast } from '@/services/undoService'
 import { useAuth } from '@/hooks/use-auth'
 
 export default function TripDetailPage() {
@@ -553,15 +554,28 @@ export default function TripDetailPage() {
 
   const confirmDeleteExpense = async () => {
     if (!expenseToDelete) return
+    const deletedExp = { ...expenseToDelete }
     setIsDeletingExpense(true)
     try {
-      await storageService.deleteExpense(expenseToDelete.id)
-      toast({
-        title: 'Comprovante excluído',
-        description: `O item "${expenseToDelete.merchant_name}" e seu respectivo arquivo no armazenamento foram removidos permanentemente.`,
-      })
+      // Exclusão no banco; não remove o arquivo do Storage imediatamente para viabilizar "Desfazer"
+      await storageService.deleteExpense(deletedExp.id, false)
       setExpenseToDelete(null)
+
+      // Atualiza estado local imediatamente
+      setExpenses((prev) => prev.filter((e) => e.id !== deletedExp.id))
       loadTripData()
+
+      // Toast com ação Desfazer (sonner) visível por 10s
+      showExpenseDeletedUndoToast({
+        expense: deletedExp,
+        tripDestination: trip?.destination,
+        onRestored: () => {
+          loadTripData()
+        },
+        onRestoreFailed: () => {
+          loadTripData()
+        },
+      })
     } catch (err: any) {
       toast({
         title: 'Exclusão não permitida',
@@ -575,15 +589,21 @@ export default function TripDetailPage() {
 
   const confirmDeleteTrip = async () => {
     if (!trip) return
+    const currentTripSnapshot = { ...trip }
+    const currentExpensesSnapshot = [...expenses]
     setIsDeletingTrip(true)
     try {
-      await storageService.deleteTrip(trip.id)
-      toast({
-        title: 'Viagem excluída com sucesso',
-        description:
-          'A viagem, suas despesas e todos os comprovantes anexados foram removidos permanentemente.',
-      })
+      await storageService.deleteTrip(currentTripSnapshot.id, false)
       setDeleteTripDialogOpen(false)
+
+      showTripDeletedUndoToast({
+        trip: currentTripSnapshot,
+        expenses: currentExpensesSnapshot,
+        onRestored: () => {
+          navigate(`/trips/${currentTripSnapshot.id}`)
+        },
+      })
+
       navigate('/')
     } catch (err: any) {
       toast({
@@ -1971,15 +1991,14 @@ export default function TripDetailPage() {
                 {formatDateRangeBR(trip.start_date, trip.end_date)})?
               </p>
               <div className="bg-rose-50 border border-rose-200 rounded-lg p-3 text-rose-800 text-xs space-y-1">
-                <p className="font-semibold">⚠️ Ação irreversível em cascata:</p>
+                <p className="font-semibold">⚠️ Exclusão em cascata:</p>
                 <ul className="list-disc list-inside space-y-0.5 text-rose-700">
                   <li>
-                    Todas as <strong>{expenses.length} despesas</strong> vinculadas serão apagadas
-                    do banco de dados.
+                    Todas as <strong>{expenses.length} despesas</strong> vinculadas serão apagadas.
                   </li>
                   <li>
-                    Todos os <strong>comprovantes fiscais (PDFs e imagens)</strong> armazenados no
-                    bucket <code>comprovantes</code> serão removidos permanentemente.
+                    Esta ação poderá ser <strong>desfeita por até 10 segundos</strong> após a
+                    confirmação através do aviso na tela.
                   </li>
                   <li>Os logs de auditoria e compliance desta viagem serão descartados.</li>
                 </ul>
@@ -2023,11 +2042,11 @@ export default function TripDetailPage() {
                 ?
               </p>
               <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-amber-800 text-xs space-y-1">
-                <p className="font-semibold">Aviso sobre o arquivo de comprovante:</p>
+                <p className="font-semibold">Possibilidade de desfazer:</p>
                 <p>
-                  O arquivo <strong>"{expenseToDelete?.file_name}"</strong> será removido
-                  permanentemente do armazenamento em nuvem e o total acumulado da viagem será
-                  recalculado automaticamente.
+                  O comprovante <strong>"{expenseToDelete?.file_name}"</strong> será desvinculado e
+                  o total recalculado. Você terá <strong>10 segundos</strong> para desfazer esta
+                  ação pelo aviso que surgirá na tela.
                 </p>
               </div>
             </AlertDialogDescription>

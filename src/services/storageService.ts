@@ -286,9 +286,11 @@ class SupabaseStorageService {
   }
 
   /**
-   * Delete a single expense and also remove its corresponding receipt object from Storage.
+   * Delete a single expense.
+   * Por padrão (deletePhysicalFile = false), NÃO remove o arquivo do Supabase Storage
+   * imediatamente para permitir que o usuário desfaça a exclusão (janela de desfazer).
    */
-  public async deleteExpense(id: string): Promise<boolean> {
+  public async deleteExpense(id: string, deletePhysicalFile = false): Promise<boolean> {
     const current = await this.getExpense(id)
     if (!current) return true
 
@@ -299,44 +301,22 @@ class SupabaseStorageService {
       }
     }
 
-    // Attempt to identify storage file to delete
-    const filePathsToDelete: string[] = []
-    const pathFromUrl = this.extractStoragePath(current.file_url, current.file_name)
-    if (pathFromUrl) {
-      filePathsToDelete.push(pathFromUrl)
-    }
-
-    // If file_url didn't have full path, see if bucket has matching file
-    if (filePathsToDelete.length === 0 && current.file_name) {
-      try {
-        const { data: bucketList } = await supabase.storage
-          .from('comprovantes')
-          .list('', { limit: 100 })
-        const cleanTarget = current.file_name.toLowerCase().replace(/[^a-z0-9.-]/g, '_')
-        const matched = bucketList?.find((f) => {
-          const low = f.name.toLowerCase()
-          return (
-            low.endsWith(cleanTarget) ||
-            low.includes(cleanTarget.replace('.pdf', '').replace(/\.[a-z]+$/, ''))
-          )
-        })
-        if (matched) {
-          filePathsToDelete.push(matched.name)
-        }
-      } catch (err) {
-        console.warn('Error matching bucket file for deletion:', err)
-      }
-    }
-
     const { error } = await this.client.from('expenses').delete().eq('id', id)
     if (error) {
       console.error('Error deleting expense:', error)
       throw error
     }
 
-    // Delete corresponding physical storage file(s)
-    if (filePathsToDelete.length > 0) {
-      await this.deleteStorageFiles(filePathsToDelete)
+    // Se explicitamente solicitado a exclusão definitiva do arquivo físico:
+    if (deletePhysicalFile) {
+      const filePathsToDelete: string[] = []
+      const pathFromUrl = this.extractStoragePath(current.file_url, current.file_name)
+      if (pathFromUrl) {
+        filePathsToDelete.push(pathFromUrl)
+      }
+      if (filePathsToDelete.length > 0) {
+        await this.deleteStorageFiles(filePathsToDelete)
+      }
     }
 
     if (current.trip_id) {
@@ -347,15 +327,71 @@ class SupabaseStorageService {
   }
 
   /**
-   * Delete a full trip in cascade:
-   * 1. Check status (reject if 'fechada' or 'reembolsada')
-   * 2. Find all attached expenses
-   * 3. Collect receipt files in bucket 'comprovantes' and delete them
-   * 4. Delete expenses
-   * 5. Delete audit_rules_log
-   * 6. Delete trip
+   * Restaura uma despesa anteriormente excluída, mantendo todos os seus campos
+   * (incluindo conferência manual, justificativas e vínculo).
+   * Se a viagem de destino estiver fechada/reembolsada, o trigger do Postgres
+   * recusará a inserção — a chamada deve propagar o erro para toast amigável.
    */
-  public async deleteTrip(id: string): Promise<boolean> {
+  public async restoreExpense(expenseData: Expense): Promise<Expense> {
+    if (expenseData.trip_id) {
+      const trip = await this.getTrip(expenseData.trip_id)
+      if (trip && this.isTripLocked(trip.status)) {
+        throw new Error(
+          `A viagem de destino "${trip.destination}" está bloqueada (${trip.status}). Não é possível restaurar a despesa.`,
+        )
+      }
+    }
+
+    const payload: Record<string, unknown> = {
+      id: expenseData.id && this.isValidUuid(expenseData.id) ? expenseData.id : undefined,
+      trip_id:
+        expenseData.trip_id && this.isValidUuid(expenseData.trip_id) ? expenseData.trip_id : null,
+      file_url: expenseData.file_url || '',
+      file_name: expenseData.file_name,
+      issue_date: expenseData.issue_date,
+      issue_time: expenseData.issue_time || null,
+      category: expenseData.category,
+      merchant_name: expenseData.merchant_name,
+      amount: expenseData.amount ?? 0,
+      ocr_raw_text: expenseData.ocr_raw_text || null,
+      is_verified: expenseData.is_verified ?? false,
+      audit_flags: expenseData.audit_flags || [],
+      audit_status: expenseData.audit_status || 'pendente',
+      audit_justification: expenseData.audit_justification || null,
+      cnpj: expenseData.cnpj || null,
+      audit_manual_checked: expenseData.audit_manual_checked ?? false,
+      audit_manual_checked_at: expenseData.audit_manual_checked_at || null,
+      audit_manual_checked_by_id: expenseData.audit_manual_checked_by_id || null,
+      audit_manual_checked_by_name: expenseData.audit_manual_checked_by_name || null,
+    }
+
+    const { data, error } = await this.client.from('expenses').insert(payload).select().single()
+
+    if (error) {
+      console.error('Error restoring expense:', error)
+      throw error
+    }
+
+    const restored = this.mapExpenseRow(data)
+    if (restored.trip_id) {
+      await this.recalculateTripTotal(restored.trip_id)
+    }
+
+    return restored
+  }
+
+  /**
+   * Delete a full trip in cascade:
+   * 1. Check status (reject if 'auditada', 'fechada' or 'reembolsada')
+   * 2. Find all attached expenses (guarda em memória antes de excluir caso deletePhysicalFile seja falso)
+   * 3. Delete expenses
+   * 4. Delete audit_rules_log
+   * 5. Delete trip
+   *
+   * Por padrão (deletePhysicalFiles = false), NÃO remove os arquivos do Storage
+   * imediatamente para permitir o "Desfazer" da exclusão da viagem.
+   */
+  public async deleteTrip(id: string, deletePhysicalFiles = false): Promise<boolean> {
     const trip = await this.getTrip(id)
     if (!trip) return true
 
@@ -364,42 +400,6 @@ class SupabaseStorageService {
     }
 
     const expenses = await this.listExpenses(id)
-
-    // Collect all storage paths
-    const pathsToDelete: string[] = []
-    let bucketFilesCache: string[] | null = null
-
-    for (const exp of expenses) {
-      const extracted = this.extractStoragePath(exp.file_url, exp.file_name)
-      if (extracted) {
-        pathsToDelete.push(extracted)
-      } else if (exp.file_name) {
-        if (!bucketFilesCache) {
-          try {
-            const { data } = await supabase.storage.from('comprovantes').list('', { limit: 100 })
-            bucketFilesCache = (data || []).map((f) => f.name)
-          } catch {
-            bucketFilesCache = []
-          }
-        }
-        const cleanTarget = exp.file_name.toLowerCase().replace(/[^a-z0-9.-]/g, '_')
-        const matched = bucketFilesCache.find((name) => {
-          const low = name.toLowerCase()
-          return (
-            low.endsWith(cleanTarget) ||
-            low.includes(cleanTarget.replace('.pdf', '').replace(/\.[a-z]+$/, ''))
-          )
-        })
-        if (matched) {
-          pathsToDelete.push(matched)
-        }
-      }
-    }
-
-    // Delete storage objects from bucket
-    if (pathsToDelete.length > 0) {
-      await this.deleteStorageFiles(pathsToDelete)
-    }
 
     // Delete expenses linked to this trip
     const { error: expError } = await this.client.from('expenses').delete().eq('trip_id', id)
@@ -418,7 +418,84 @@ class SupabaseStorageService {
       throw tripError
     }
 
+    // Se exclusão definitiva dos arquivos foi explicitamente requisitada:
+    if (deletePhysicalFiles) {
+      const pathsToDelete: string[] = []
+      for (const exp of expenses) {
+        const extracted = this.extractStoragePath(exp.file_url, exp.file_name)
+        if (extracted) pathsToDelete.push(extracted)
+      }
+      if (pathsToDelete.length > 0) {
+        await this.deleteStorageFiles(pathsToDelete)
+      }
+    }
+
     return true
+  }
+
+  /**
+   * Restaura uma viagem completa anteriormente excluída, incluindo suas despesas associadas.
+   */
+  public async restoreTripWithExpenses(trip: Trip, expenses: Expense[]): Promise<Trip> {
+    const tripPayload: Record<string, unknown> = {
+      id: trip.id,
+      destination: trip.destination,
+      start_date: trip.start_date,
+      end_date: trip.end_date,
+      transport_type: trip.transport_type,
+      status: trip.status || 'em_triagem',
+      total_amount: trip.total_amount ?? 0,
+      notes: trip.notes || '',
+      motivo: trip.motivo || '',
+    }
+    if (trip.user_id && this.isValidUuid(trip.user_id)) {
+      tripPayload.user_id = trip.user_id
+    }
+
+    const { data: insertedTrip, error: tripError } = await this.client
+      .from('trips')
+      .insert(tripPayload)
+      .select()
+      .single()
+
+    if (tripError) {
+      console.error('Error restoring trip:', tripError)
+      throw tripError
+    }
+
+    // Restaura cada despesa associada
+    if (expenses.length > 0) {
+      const expPayloads = expenses.map((exp) => ({
+        id: exp.id,
+        trip_id: trip.id,
+        file_url: exp.file_url || '',
+        file_name: exp.file_name,
+        issue_date: exp.issue_date,
+        issue_time: exp.issue_time || null,
+        category: exp.category,
+        merchant_name: exp.merchant_name,
+        amount: exp.amount ?? 0,
+        ocr_raw_text: exp.ocr_raw_text || null,
+        is_verified: exp.is_verified ?? false,
+        audit_flags: exp.audit_flags || [],
+        audit_status: exp.audit_status || 'pendente',
+        audit_justification: exp.audit_justification || null,
+        cnpj: exp.cnpj || null,
+        audit_manual_checked: exp.audit_manual_checked ?? false,
+        audit_manual_checked_at: exp.audit_manual_checked_at || null,
+        audit_manual_checked_by_id: exp.audit_manual_checked_by_id || null,
+        audit_manual_checked_by_name: exp.audit_manual_checked_by_name || null,
+      }))
+
+      const { error: expsError } = await this.client.from('expenses').insert(expPayloads)
+      if (expsError) {
+        console.error('Error restoring expenses of trip:', expsError)
+        // Mesmo com erro em despesas, o trip foi restaurado
+      }
+    }
+
+    await this.recalculateTripTotal(trip.id)
+    return this.mapTripRow(insertedTrip)
   }
 
   public async recalculateTripTotal(tripId: string): Promise<number> {

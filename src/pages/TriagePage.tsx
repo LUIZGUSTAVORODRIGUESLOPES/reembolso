@@ -43,6 +43,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { useToast } from '@/hooks/use-toast'
+import { showExpenseDeletedUndoToast } from '@/services/undoService'
 import { useAuth } from '@/hooks/use-auth'
 import { CreateTripModal } from '@/components/CreateTripModal'
 import { DocumentViewer } from '@/components/DocumentViewer'
@@ -263,22 +264,27 @@ export default function TriagePage() {
 
   const handleDeleteExpense = async () => {
     if (!currentExpense) return
+    const deletedExp = { ...currentExpense }
     setIsDeleting(true)
     try {
-      await storageService.deleteExpense(currentExpense.id)
-      toast({
-        title: 'Comprovante excluído',
-        description: 'O item e o respectivo arquivo foram removidos com sucesso.',
-      })
+      // Exclui sem apagar o arquivo do Storage imediatamente para permitir Desfazer
+      await storageService.deleteExpense(deletedExp.id, false)
       setDeleteDialogOpen(false)
 
-      const remaining = expenses.filter((e) => e.id !== currentExpense.id)
+      const remaining = expenses.filter((e) => e.id !== deletedExp.id)
       setExpenses(remaining)
       if (currentIndex >= remaining.length && remaining.length > 0) {
         setCurrentIndex(remaining.length - 1)
       } else if (remaining.length === 0) {
         navigate('/')
       }
+
+      showExpenseDeletedUndoToast({
+        expense: deletedExp,
+        onRestored: (restored) => {
+          setExpenses((prev) => [restored, ...prev])
+        },
+      })
     } catch (err: any) {
       toast({
         title: 'Exclusão bloqueada',
@@ -681,11 +687,15 @@ export default function TriagePage() {
             <AlertDialogDescription className="text-slate-600 text-xs sm:text-sm space-y-2">
               <p>
                 Tem certeza que deseja descartar este comprovante{' '}
-                <strong>"{currentExpense.file_name}"</strong>?
+                <strong>"{currentExpense.file_name}"</strong> (
+                {formatCurrencyBRL(currentExpense.amount)} — {currentExpense.merchant_name})?
               </p>
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-amber-900 text-xs">
-                Esta ação excluirá os dados extraídos pelo OCR e removerá o arquivo correspondente
-                do armazenamento em nuvem permanentemente.
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-amber-900 text-xs space-y-1">
+                <p className="font-semibold">Possibilidade de desfazer:</p>
+                <p>
+                  Esta ação excluirá os dados extraídos pelo OCR da fila de triagem. Você terá{' '}
+                  <strong>10 segundos</strong> para desfazer a ação pelo aviso na tela.
+                </p>
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>

@@ -53,8 +53,8 @@ export const TripPhaseToggle: React.FC<TripPhaseToggleProps> = ({
     },
     {
       id: 'empacotadas',
-      label: 'Empacotadas',
-      shortLabel: 'Empacotadas',
+      label: 'Enviadas',
+      shortLabel: 'Enviadas',
       description: 'Relatório enviado ou auditada/fechada',
       icon: PackageCheck,
       activeColor: 'bg-white text-indigo-900 shadow-sm border-indigo-200',

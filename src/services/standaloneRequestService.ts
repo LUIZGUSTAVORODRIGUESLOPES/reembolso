@@ -253,7 +253,7 @@ class StandaloneRequestService {
 
     if (current.status !== 'empacotada') {
       throw new Error(
-        `Apenas solicitações com status "empacotada" podem ser reabertas. O status atual é "${current.status}".`,
+        `Apenas solicitações com status "enviada" podem ser reabertas. O status atual é "${current.status}".`,
       )
     }
 
@@ -287,7 +287,7 @@ class StandaloneRequestService {
     if (!current) throw new Error('Solicitação avulsa não encontrada.')
 
     if (current.status !== 'empacotada') {
-      throw new Error('A solicitação precisa estar empacotada para poder ser quitada.')
+      throw new Error('A solicitação precisa estar enviada para poder ser quitada.')
     }
 
     const updates: Record<string, unknown> = {
@@ -366,7 +366,7 @@ class StandaloneRequestService {
     if (!current) return true
 
     if (current.status !== 'em_triagem') {
-      throw new Error('Não é permitido excluir uma solicitação já empacotada ou quitada.')
+      throw new Error('Não é permitido excluir uma solicitação já enviada ou quitada.')
     }
 
     const { error } = await this.client.from('standalone_requests').delete().eq('id', id)

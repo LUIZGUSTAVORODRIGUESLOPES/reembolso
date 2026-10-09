@@ -449,7 +449,7 @@ export default function Index() {
               )}
             </div>
 
-            {/* Alternador de Fase da Viagem (Em Aberto / Empacotadas / Quitadas) */}
+            {/* Alternador de Fase da Viagem (Em Aberto / Enviadas / Quitadas) */}
             <div className="flex items-center gap-2 flex-wrap">
               <TripPhaseToggle
                 value={phaseFilter}

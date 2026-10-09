@@ -530,7 +530,7 @@ export function SettleStandaloneModal({
                             </span>
                             {!isAllowed && (
                               <span className="text-[10px] text-amber-600 font-medium">
-                                Não empacotada
+                                Não enviada
                               </span>
                             )}
                           </div>

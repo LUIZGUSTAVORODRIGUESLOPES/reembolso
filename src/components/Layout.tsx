@@ -260,7 +260,7 @@ export default function Layout() {
             >
               <span className="flex items-center gap-2">
                 <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
-                Empacotar Relatório
+                Enviar Relatório
               </span>
               <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
             </button>

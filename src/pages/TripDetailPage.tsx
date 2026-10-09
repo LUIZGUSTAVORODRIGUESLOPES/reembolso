@@ -2672,9 +2672,7 @@ export default function TripDetailPage() {
                     A viagem será desbloqueada para inclusão, edição e exclusão de comprovantes.
                   </li>
                   <li>O histórico e o motivo da reabertura ficarão permanentemente gravados.</li>
-                  <li>
-                    Após as correções, a viagem deverá ser reempacotada e o relatório reenviado.
-                  </li>
+                  <li>Após as correções, o relatório deverá ser reenviado.</li>
                 </ul>
               </div>
 

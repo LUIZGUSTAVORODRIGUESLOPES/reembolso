@@ -109,6 +109,25 @@ export const TRIP_STATUS_CONFIG: Record<
   },
 }
 
+export const STANDALONE_STATUS_CONFIG: Record<
+  'em_triagem' | 'empacotada' | 'quitada',
+  { label: string; badgeClass: string; pulse?: boolean }
+> = {
+  em_triagem: {
+    label: 'Em Triagem',
+    badgeClass: 'bg-blue-100 text-blue-800 border-blue-200',
+    pulse: true,
+  },
+  empacotada: {
+    label: 'Enviada',
+    badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+  },
+  quitada: {
+    label: 'Quitada',
+    badgeClass: 'bg-emerald-600 text-white border-emerald-700',
+  },
+}
+
 export const TRANSPORT_LABELS: Record<TransportType, string> = {
   aéreo: 'Aéreo',
   carro_proprio: 'Carro Próprio',

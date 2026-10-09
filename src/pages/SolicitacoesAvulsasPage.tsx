@@ -509,7 +509,7 @@ export default function SolicitacoesAvulsasPage() {
     setEmailModalOpen(true)
   }
 
-  // Disparar envio de e-mail (Empacotamento)
+  // Disparar envio de e-mail (Envio)
   const handleSendEmail = async () => {
     if (!selectedForEmail) return
     if (!emailRecipient.trim()) {
@@ -550,8 +550,8 @@ export default function SolicitacoesAvulsasPage() {
         }
 
         toast({
-          title: 'Solicitação empacotada e enviada! 📦✉️',
-          description: `E-mail enviado com sucesso para ${emailRecipient}. Status atualizado para "Empacotada".`,
+          title: 'Solicitação enviada com sucesso! ✉️',
+          description: `E-mail enviado com sucesso para ${emailRecipient}. Status atualizado para "Enviada".`,
         })
         setEmailModalOpen(false)
       } else {
@@ -594,8 +594,7 @@ export default function SolicitacoesAvulsasPage() {
     if (req.status !== 'empacotada') {
       toast({
         title: 'Quitação indisponível',
-        description:
-          'A solicitação precisa ser empacotada (enviada por e-mail) antes de ser quitada.',
+        description: 'A solicitação precisa ser enviada por e-mail antes de ser quitada.',
         variant: 'destructive',
       })
       return
@@ -609,7 +608,7 @@ export default function SolicitacoesAvulsasPage() {
     if (!isAdmin) {
       toast({
         title: 'Acesso restrito',
-        description: 'Apenas Administradores podem reabrir solicitações empacotadas.',
+        description: 'Apenas Administradores podem reabrir solicitações enviadas.',
         variant: 'destructive',
       })
       return
@@ -617,7 +616,7 @@ export default function SolicitacoesAvulsasPage() {
     if (req.status !== 'empacotada') {
       toast({
         title: 'Reabertura indisponível',
-        description: 'Apenas solicitações com status "Empacotada" podem ser reabertas.',
+        description: 'Apenas solicitações com status "Enviada" podem ser reabertas.',
         variant: 'destructive',
       })
       return
@@ -672,7 +671,7 @@ export default function SolicitacoesAvulsasPage() {
     if (req.status !== 'em_triagem') {
       toast({
         title: 'Exclusão não permitida',
-        description: 'Não é permitido excluir uma solicitação já empacotada ou quitada.',
+        description: 'Não é permitido excluir uma solicitação já enviada ou quitada.',
         variant: 'destructive',
       })
       return
@@ -792,7 +791,7 @@ export default function SolicitacoesAvulsasPage() {
           >
             <span className="text-[11px] font-medium text-emerald-700 block flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-500" />
-              Empacotadas (Enviadas)
+              Enviadas
             </span>
             <span className="text-xl font-black text-emerald-900 block mt-1">
               {counts.empacotada}
@@ -841,7 +840,7 @@ export default function SolicitacoesAvulsasPage() {
             <SelectContent>
               <SelectItem value="all">Todos os Status</SelectItem>
               <SelectItem value="em_triagem">Em Triagem</SelectItem>
-              <SelectItem value="empacotada">Empacotada (Enviada)</SelectItem>
+              <SelectItem value="empacotada">Enviada</SelectItem>
               <SelectItem value="quitada">Quitada</SelectItem>
             </SelectContent>
           </Select>
@@ -963,7 +962,7 @@ export default function SolicitacoesAvulsasPage() {
                         {isEmpacotada && (
                           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-600" />
-                            Empacotada
+                            Enviada
                           </span>
                         )}
                         {isQuitada && (
@@ -1017,7 +1016,7 @@ export default function SolicitacoesAvulsasPage() {
                             <FileSpreadsheet className="w-4 h-4" />
                           </Button>
 
-                          {/* Enviar / Reenviar e-mail (Empacotar) */}
+                          {/* Enviar / Reenviar e-mail */}
                           <Button
                             variant="ghost"
                             size="sm"
@@ -1030,14 +1029,14 @@ export default function SolicitacoesAvulsasPage() {
                             title={
                               isEmpacotada
                                 ? 'Reenviar prestação de contas por e-mail'
-                                : 'Enviar por e-mail (Empacotar)'
+                                : 'Enviar por e-mail'
                             }
                           >
                             <Mail className="w-3.5 h-3.5" />
                             {isEmpacotada ? 'Reenviar' : 'Enviar E-mail'}
                           </Button>
 
-                          {/* Botão Quitar (Apenas se empacotada) */}
+                          {/* Botão Quitar (Apenas se enviada) */}
                           {isEmpacotada && (
                             <Button
                               size="sm"
@@ -1049,14 +1048,14 @@ export default function SolicitacoesAvulsasPage() {
                             </Button>
                           )}
 
-                          {/* Reabrir (Apenas Admin e se empacotada) */}
+                          {/* Reabrir (Apenas Admin e se enviada) */}
                           {isEmpacotada && isAdmin && (
                             <Button
                               variant="ghost"
                               size="sm"
                               onClick={() => handleOpenReopenModal(req)}
                               className="h-8 px-2 text-amber-700 hover:text-amber-900 hover:bg-amber-50 text-[11px] gap-1"
-                              title="Reabrir solicitação empacotada para correções (Admin)"
+                              title="Reabrir solicitação enviada para correções (Admin)"
                             >
                               <RotateCcw className="w-3.5 h-3.5" />
                               Reabrir
@@ -1348,7 +1347,7 @@ export default function SolicitacoesAvulsasPage() {
       </Dialog>
 
       {/* ========================================================= */}
-      {/* MODAL 2: Envio por E-mail (Empacotamento) */}
+      {/* MODAL 2: Envio por E-mail */}
       {/* ========================================================= */}
       <Dialog open={emailModalOpen} onOpenChange={setEmailModalOpen}>
         <DialogContent className="sm:max-w-[580px] max-h-[92vh] overflow-y-auto">
@@ -1361,7 +1360,7 @@ export default function SolicitacoesAvulsasPage() {
                 <DialogTitle className="text-lg font-bold text-slate-900">
                   {selectedForEmail?.status === 'empacotada'
                     ? 'Reenviar Solicitação por E-mail'
-                    : 'Enviar Solicitação por E-mail (Empacotar)'}
+                    : 'Enviar Solicitação por E-mail'}
                 </DialogTitle>
                 <DialogDescription className="text-xs text-slate-500">
                   O relatório com o comprovante fiscal auditado será anexado em formato PDF.
@@ -1422,8 +1421,8 @@ export default function SolicitacoesAvulsasPage() {
               <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-900 flex items-start gap-2">
                 <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
                 <span>
-                  Ao enviar com sucesso, a solicitação ficará com status <strong>Empacotada</strong>{' '}
-                  e liberada para quitação financeira.
+                  Ao enviar com sucesso, a solicitação ficará com status <strong>Enviada</strong> e
+                  liberada para quitação financeira.
                 </span>
               </div>
 
@@ -1457,7 +1456,7 @@ export default function SolicitacoesAvulsasPage() {
               ) : (
                 <Send className="w-4 h-4" />
               )}
-              {selectedForEmail?.status === 'empacotada' ? 'Reenviar E-mail' : 'Enviar e Empacotar'}
+              {selectedForEmail?.status === 'empacotada' ? 'Reenviar E-mail' : 'Enviar Relatório'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1491,7 +1490,7 @@ export default function SolicitacoesAvulsasPage() {
               </div>
               <div>
                 <DialogTitle className="text-base font-bold text-slate-900">
-                  Reabrir Solicitação Empacotada
+                  Reabrir Solicitação Enviada
                 </DialogTitle>
                 <DialogDescription className="text-xs text-slate-500">
                   Governança corporativa: reabre a solicitação para &quot;Em Triagem&quot;

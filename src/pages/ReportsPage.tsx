@@ -539,9 +539,9 @@ export default function ReportsPage() {
             Relatórios & Prestação de Contas
           </h2>
           <p className="text-sm text-slate-500 mt-1 max-w-3xl">
-            Empacote processos de viagem concluídos ou auditados em relatórios consolidados
-            unificados (Excel, PDF consolidado com todos os comprovantes em sequência e envio direto
-            por e-mail).
+            Envie processos de viagem concluídos ou auditados em relatórios consolidados unificados
+            (Excel, PDF consolidado com todos os comprovantes em sequência e envio direto por
+            e-mail).
           </p>
         </div>
 
@@ -586,7 +586,7 @@ export default function ReportsPage() {
       {/* Filtros da Central de Relatórios: Alternador de Fase e Busca por Texto */}
       <Card className="border border-slate-200 bg-white shadow-sm p-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-          {/* Alternador de Fase (Em Aberto / Empacotadas / Quitadas) */}
+          {/* Alternador de Fase (Em Aberto / Enviadas / Quitadas) */}
           <div className="flex items-center gap-2 flex-wrap">
             <TripPhaseToggle
               value={phaseFilter}
@@ -781,7 +781,7 @@ export default function ReportsPage() {
                         className="bg-[#1e40af] hover:bg-[#1d3d9e] text-white text-xs gap-1.5 shadow-sm font-semibold h-9 px-3.5"
                       >
                         <Package className="w-4 h-4" />
-                        <span>Empacotar Relatório</span>
+                        <span>Enviar Relatório</span>
                       </Button>
                     </div>
                   </div>

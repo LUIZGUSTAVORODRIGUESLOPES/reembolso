@@ -33,13 +33,66 @@ export function getEffectiveTripStatus(
   return currentStatus
 }
 
-export function getTripPhase(
-  trip: Pick<Trip, 'status' | 'report_sent_at'>,
-): 'em_aberto' | 'empacotadas' | 'quitadas' {
+export interface TripPhaseInput {
+  status: Trip['status']
+  report_sent_at?: Trip['report_sent_at']
+  expenses?: Array<{
+    is_verified?: boolean | null
+    audit_status?: string | null
+    audit_manual_checked?: boolean | null
+  }> | null
+  hasPendingExpenses?: boolean
+  isFullyChecked?: boolean
+}
+
+/**
+ * Determina se uma lista de despesas possui pendências de conferência.
+ * Critério rigoroso pós-v0.0.41:
+ * Uma despesa é considerada conferida se audit_manual_checked === true
+ * e audit_status !== 'pendente' e is_verified !== false.
+ */
+export function hasPendingExpensesCheck(
+  expenses?: Array<{
+    is_verified?: boolean | null
+    audit_status?: string | null
+    audit_manual_checked?: boolean | null
+  }> | null,
+): boolean {
+  if (!expenses || expenses.length === 0) {
+    // Sem despesas ou não carregadas ainda
+    return false
+  }
+  return expenses.some(
+    (exp) =>
+      exp.audit_manual_checked !== true ||
+      exp.audit_status === 'pendente' ||
+      exp.is_verified === false,
+  )
+}
+
+export function getTripPhase(trip: TripPhaseInput): 'em_aberto' | 'empacotadas' | 'quitadas' {
   const effectiveStatus = getEffectiveTripStatus(trip)
 
   if (effectiveStatus === 'reembolsada') {
     return 'quitadas'
+  }
+
+  // BARREIRA LÓGICA (Gatekeeping):
+  // Se houver informação sobre as despesas e elas NÃO estiverem 100% conferidas
+  // (ou se hasPendingExpenses for explicitamente true),
+  // a viagem DEVE retornar estritamente a fase 'em_aberto' (Triagem),
+  // impedindo que a fase de 'Enviadas/Empacotadas' seja exibida prematuramente.
+  const hasPending =
+    trip.hasPendingExpenses !== undefined
+      ? trip.hasPendingExpenses
+      : trip.isFullyChecked !== undefined
+        ? !trip.isFullyChecked
+        : trip.expenses && trip.expenses.length > 0
+          ? hasPendingExpensesCheck(trip.expenses)
+          : false
+
+  if (hasPending) {
+    return 'em_aberto'
   }
 
   // Viagens empacotadas / enviadas:
@@ -64,7 +117,7 @@ export interface PhaseCounts {
   quitadas: number
 }
 
-export function countTripsByPhase(trips: Pick<Trip, 'status' | 'report_sent_at'>[]): PhaseCounts {
+export function countTripsByPhase(trips: TripPhaseInput[]): PhaseCounts {
   const counts: PhaseCounts = {
     todas: trips.length,
     em_aberto: 0,

@@ -42,6 +42,11 @@ interface SettleTripModalProps {
   currentTrip: Trip
   onSuccess: (updatedTrip: Trip) => void
   user?: { id: string; name: string } | null
+  expenses?: Array<{
+    is_verified?: boolean | null
+    audit_status?: string | null
+    audit_manual_checked?: boolean | null
+  }> | null
 }
 
 export function SettleTripModal({
@@ -76,6 +81,44 @@ export function SettleTripModal({
   // Confirmation/saving state
   const [submitting, setSubmitting] = useState(false)
 
+  // Estado de carregamento das despesas da viagem atual (caso não passadas por props)
+  const [tripExpensesList, setTripExpensesList] = useState<
+    Array<{
+      is_verified?: boolean | null
+      audit_status?: string | null
+      audit_manual_checked?: boolean | null
+    }>
+  >(expenses || [])
+  const [loadingCurrentExpenses, setLoadingCurrentExpenses] = useState(false)
+
+  // Recarregar despesas quando o modal abrir
+  useEffect(() => {
+    if (open) {
+      if (expenses && expenses.length > 0) {
+        setTripExpensesList(expenses)
+      } else {
+        setLoadingCurrentExpenses(true)
+        storageService
+          .listExpenses(currentTrip.id)
+          .then((res) => setTripExpensesList(res || []))
+          .catch((err) =>
+            console.warn('Erro ao carregar despesas para validação de quitação:', err),
+          )
+          .finally(() => setLoadingCurrentExpenses(false))
+      }
+    }
+  }, [open, currentTrip.id])
+
+  // Gatekeeping: Checagem se a viagem atual possui recibos pendentes
+  const currentTripHasPending = useMemo(() => {
+    if (loadingCurrentExpenses) return false
+    if (!tripExpensesList || tripExpensesList.length === 0) return true
+    return tripExpensesList.some(
+      (e) =>
+        e.audit_manual_checked !== true || e.audit_status === 'pendente' || e.is_verified === false,
+    )
+  }, [tripExpensesList, loadingCurrentExpenses])
+
   // Reset values when modal opens or currentTrip changes
   useEffect(() => {
     if (open) {
@@ -93,16 +136,36 @@ export function SettleTripModal({
   const loadEligibleTrips = async () => {
     setLoadingEligibleTrips(true)
     try {
-      const trips = await storageService.listTrips()
+      const [trips, allExps] = await Promise.all([
+        storageService.listTrips(),
+        storageService.listAllExpenses().catch(() => []),
+      ])
+
+      // Mapear pendências por trip_id
+      const pendingMap = new Map<string, boolean>()
+      for (const e of allExps) {
+        const isPending =
+          e.audit_manual_checked !== true ||
+          e.audit_status === 'pendente' ||
+          e.is_verified === false
+        if (isPending) {
+          pendingMap.set(e.trip_id, true)
+        }
+      }
+
       // Viagens elegíveis: não reembolsadas
-      // Viagens em_triagem ou com_pendencias serão exibidas desabilitadas com explicação
       const notReimbursed = trips.filter((t) => t.status !== 'reembolsada')
-      // Garantir que a viagem atual esteja na lista mesmo se status for diferente
       const hasCurrent = notReimbursed.some((t) => t.id === currentTrip.id)
       if (!hasCurrent) {
         notReimbursed.unshift(currentTrip)
       }
-      setAllEligibleTrips(notReimbursed)
+      // Anexar flag interna de pendência para cada viagem
+      const enriched = notReimbursed.map((t) => {
+        const hasPending =
+          pendingMap.get(t.id) ?? (t.id === currentTrip.id ? currentTripHasPending : false)
+        return { ...t, _hasPendingExpenses: hasPending }
+      })
+      setAllEligibleTrips(enriched as any)
     } catch (err) {
       console.error('Erro ao listar viagens elegíveis para quitação:', err)
       toast({
@@ -154,6 +217,15 @@ export function SettleTripModal({
 
   // Submissão do depósito único (Caso NÃO)
   const handleConfirmSingleSettlement = async () => {
+    if (currentTripHasPending) {
+      toast({
+        title: 'Bloqueio de Quitação',
+        description:
+          'Complete a conferência de todos os recibos pendentes na Triagem para liberar o envio.',
+        variant: 'destructive',
+      })
+      return
+    }
     const parsedAmount = parseFloat(
       String(singleDepositAmount).replace(/\./g, '').replace(',', '.'),
     )
@@ -206,6 +278,15 @@ export function SettleTripModal({
 
   // Submissão do depósito conjunto (Caso SIM)
   const handleConfirmBatchSettlement = async () => {
+    if (currentTripHasPending) {
+      toast({
+        title: 'Bloqueio de Quitação',
+        description:
+          'Complete a conferência de todos os recibos pendentes na Triagem para liberar o envio.',
+        variant: 'destructive',
+      })
+      return
+    }
     if (!batchDepositDate) {
       toast({
         title: 'Data do depósito obrigatória',
@@ -414,6 +495,20 @@ export function SettleTripModal({
                 </p>
               </div>
 
+              {/* Alerta de Gatekeeping se houver comprovantes pendentes */}
+              {currentTripHasPending && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-800 flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold block">Quitação Bloqueada</span>
+                    <p className="mt-0.5">
+                      Complete a conferência de todos os recibos pendentes na Triagem para liberar o
+                      envio.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               <DialogFooter className="pt-2 gap-2">
                 <Button
                   type="button"
@@ -425,25 +520,38 @@ export function SettleTripModal({
                 >
                   Cancelar
                 </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={handleConfirmSingleSettlement}
-                  disabled={submitting || !singleDepositDate || !singleDepositAmount}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold gap-1.5 shadow-sm"
+                <div
+                  title={
+                    currentTripHasPending
+                      ? 'Complete a conferência de todos os recibos pendentes na Triagem para liberar o envio.'
+                      : undefined
+                  }
                 >
-                  {submitting ? (
-                    <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      <span>Gravando Quitação...</span>
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Confirmar Quitação Única</span>
-                    </>
-                  )}
-                </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={handleConfirmSingleSettlement}
+                    disabled={
+                      submitting ||
+                      !singleDepositDate ||
+                      !singleDepositAmount ||
+                      currentTripHasPending
+                    }
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold gap-1.5 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {submitting ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Gravando Quitação...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Confirmar Quitação Única</span>
+                      </>
+                    )}
+                  </Button>
+                </div>
               </DialogFooter>
             </div>
           ) : (
@@ -507,10 +615,14 @@ export function SettleTripModal({
                       const isCurrent = t.id === currentTrip.id
                       const isSelected = selectedTripIds.includes(t.id)
                       const effectiveStatus = getEffectiveTripStatus(t)
+                      const tripHasPending =
+                        Boolean((t as any)._hasPendingExpenses) ||
+                        (isCurrent && currentTripHasPending)
                       const isAuditadaOuFechada =
-                        effectiveStatus === 'auditada' || effectiveStatus === 'fechada'
-                      // Viagens em triagem ou com pendências não devem ser quitadas
-                      const isAllowed = isAuditadaOuFechada || isCurrent
+                        (effectiveStatus === 'auditada' || effectiveStatus === 'fechada') &&
+                        !tripHasPending
+                      // Viagens em triagem, com pendências ou com recibos não conferidos não podem ser quitadas
+                      const isAllowed = isAuditadaOuFechada
                       const statusConf = TRIP_STATUS_CONFIG[effectiveStatus]
 
                       return (
@@ -550,9 +662,11 @@ export function SettleTripModal({
                                 {t.user_profile?.full_name || 'Solicitante'}
                               </p>
                               {!isAllowed && (
-                                <p className="text-[10px] text-amber-700 font-medium">
-                                  ⚠️ Status ({statusConf.label}) não elegível para quitação. Conclua
-                                  a auditoria/fechamento antes.
+                                <p className="text-[10px] text-rose-700 font-medium">
+                                  ⚠️{' '}
+                                  {tripHasPending
+                                    ? 'Complete a conferência de todos os recibos pendentes na Triagem para liberar o envio.'
+                                    : `Status (${statusConf.label}) não elegível para quitação. Conclua a auditoria antes.`}
                                 </p>
                               )}
                             </div>
@@ -647,6 +761,20 @@ export function SettleTripModal({
                 </p>
               </div>
 
+              {/* Alerta de Gatekeeping se a viagem atual tiver pendências */}
+              {currentTripHasPending && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-800 flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold block">Quitação Bloqueada</span>
+                    <p className="mt-0.5">
+                      Complete a conferência de todos os recibos pendentes na Triagem para liberar o
+                      envio.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               <DialogFooter className="pt-2 gap-2">
                 <Button
                   type="button"
@@ -658,31 +786,40 @@ export function SettleTripModal({
                 >
                   Cancelar
                 </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={handleConfirmBatchSettlement}
-                  disabled={
-                    submitting ||
-                    !batchDepositDate ||
-                    parsedBatchDepositTotal <= 0 ||
-                    !isSumMatching ||
-                    selectedTripIds.length <= 1
+                <div
+                  title={
+                    currentTripHasPending
+                      ? 'Complete a conferência de todos os recibos pendentes na Triagem para liberar o envio.'
+                      : undefined
                   }
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold gap-1.5 shadow-sm"
                 >
-                  {submitting ? (
-                    <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      <span>Quitando Viagens...</span>
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Confirmar Quitação Conjunta ({selectedTripIds.length} viagens)</span>
-                    </>
-                  )}
-                </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={handleConfirmBatchSettlement}
+                    disabled={
+                      submitting ||
+                      !batchDepositDate ||
+                      parsedBatchDepositTotal <= 0 ||
+                      !isSumMatching ||
+                      selectedTripIds.length <= 1 ||
+                      currentTripHasPending
+                    }
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold gap-1.5 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {submitting ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Quitando Viagens...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Confirmar Quitação Conjunta ({selectedTripIds.length} viagens)</span>
+                      </>
+                    )}
+                  </Button>
+                </div>
               </DialogFooter>
             </div>
           )}

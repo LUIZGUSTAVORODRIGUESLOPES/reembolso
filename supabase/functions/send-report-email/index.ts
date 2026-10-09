@@ -263,6 +263,52 @@ Deno.serve(async (req: Request) => {
           403,
         )
       }
+
+      // GATEKEEPING DE BACKEND:
+      // Verifica se há recibos pendentes de conferência na viagem.
+      // Se houver qualquer recibo não conferido (audit_manual_checked != true), aborta imediatamente com 400 Bad Request.
+      const { data: tripExpenses, error: expensesError } = await userSupabase
+        .from('expenses')
+        .select('id, is_verified, audit_status, audit_manual_checked')
+        .eq('trip_id', tripId)
+
+      if (expensesError) {
+        console.error('Erro ao consultar despesas para validação de gatekeeping:', expensesError)
+        return jsonResponse(
+          { error: 'Não foi possível validar o status dos comprovantes da viagem.' },
+          500,
+        )
+      }
+
+      const totalTripExpenses = tripExpenses?.length || 0
+      if (totalTripExpenses === 0) {
+        return jsonResponse(
+          {
+            error:
+              'A viagem não possui comprovantes vinculados. Complete a inclusão e conferência na Triagem para liberar o envio.',
+          },
+          400,
+        )
+      }
+
+      const pendingExpenses = (tripExpenses || []).filter(
+        (e) =>
+          e.audit_manual_checked !== true ||
+          e.audit_status === 'pendente' ||
+          e.is_verified === false,
+      )
+
+      if (pendingExpenses.length > 0) {
+        return jsonResponse(
+          {
+            error:
+              'Complete a conferência de todos os recibos pendentes na Triagem para liberar o envio.',
+            pendingCount: pendingExpenses.length,
+            totalExpenses: totalTripExpenses,
+          },
+          400,
+        )
+      }
     } else if (standaloneId) {
       if (typeof standaloneId !== 'string' || !UUID_REGEX.test(standaloneId)) {
         return jsonResponse({ error: 'Identificador da solicitação avulsa inválido.' }, 400)

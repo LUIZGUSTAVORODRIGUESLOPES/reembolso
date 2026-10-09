@@ -34,8 +34,19 @@ import {
   RotateCcw,
   Unlock,
   Send,
+  Download,
+  ChevronDown,
 } from 'lucide-react'
 import { reportEmailService } from '@/services/reportEmailService'
+import { exportTripToExcel, exportConsolidatedReportPdf } from '@/services/reportExportService'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { DocumentViewer } from '@/components/DocumentViewer'
 import { storageService } from '@/services/storageService'
 import { Trip, Expense, AuditEvaluationRule, ExpenseCategory, TripStatus } from '@/types/database'
@@ -678,6 +689,69 @@ export default function TripDetailPage() {
     }
   }
 
+  // Estado local para geração de PDF na TripDetailPage
+  const [generatingPdf, setGeneratingPdf] = useState(false)
+  const [pdfProgressText, setPdfProgressText] = useState('')
+
+  // Exportação direta para Excel a partir de TripDetailPage
+  const handleExportExcelDirect = () => {
+    if (!trip) return
+    try {
+      exportTripToExcel(trip, expenses)
+      toast({
+        title: 'Planilha baixada!',
+        description: 'O arquivo .csv estruturado para Excel foi gerado e baixado com sucesso.',
+      })
+    } catch (err: any) {
+      console.error('Erro ao exportar planilha Excel:', err)
+      toast({
+        title: 'Erro ao gerar planilha',
+        description: err?.message || 'Falha ao processar os dados da viagem.',
+        variant: 'destructive',
+      })
+    }
+  }
+
+  // Exportação direta para PDF Consolidado com rasterização dos comprovantes e progresso
+  const handleExportPdfDirect = async () => {
+    if (!trip || generatingPdf) return
+    setGeneratingPdf(true)
+    setPdfProgressText('Iniciando processamento dos comprovantes...')
+
+    try {
+      const collaboratorName =
+        trip.user_profile?.full_name ||
+        profile?.full_name ||
+        user?.user_metadata?.full_name ||
+        'Colaborador Solicitante'
+
+      await exportConsolidatedReportPdf(
+        trip,
+        expenses,
+        (current, total, message) => {
+          setPdfProgressText(`${message} (${Math.round((current / total) * 100)}%)`)
+        },
+        collaboratorName,
+      )
+
+      toast({
+        title: 'Relatório consolidado gerado!',
+        description:
+          'O PDF consolidado com todos os comprovantes foi processado e aberto em nova aba.',
+      })
+    } catch (err: any) {
+      console.error('Erro ao gerar relatório consolidado em PDF:', err)
+      toast({
+        title: 'Erro ao gerar relatório',
+        description: err?.message || 'Houve uma falha ao compilar o PDF com os comprovantes.',
+        variant: 'destructive',
+      })
+    } finally {
+      setGeneratingPdf(false)
+      setPdfProgressText('')
+    }
+  }
+
   // Abertura do modal de e-mail na TripDetailPage
   const handleOpenTripEmailModal = () => {
     if (!trip) return
@@ -1093,7 +1167,65 @@ export default function TripDetailPage() {
             <span>{isTripLocked ? 'Ver / Alterar Status' : 'Editar Viagem'}</span>
           </Button>
 
-          {/* Botão Enviar / Reenviar Relatório por E-mail */}
+          {/* Exportação Direta de Relatório: PDF Consolidado e Planilha Excel */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={generatingPdf}
+                className="text-xs gap-1.5 shadow-sm font-semibold text-slate-700 border-slate-300 hover:bg-slate-50"
+              >
+                {generatingPdf ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                ) : (
+                  <Download className="w-3.5 h-3.5 text-blue-600" />
+                )}
+                <span>{generatingPdf ? 'Gerando PDF...' : 'Exportar Relatório'}</span>
+                <ChevronDown className="w-3 h-3 text-slate-400" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-64">
+              <DropdownMenuLabel className="text-xs font-semibold text-slate-600">
+                Baixar arquivos diretamente
+              </DropdownMenuLabel>
+              <DropdownMenuItem
+                onClick={handleExportPdfDirect}
+                disabled={generatingPdf}
+                className="cursor-pointer gap-2 py-2 text-xs"
+              >
+                <FileText className="w-4 h-4 text-rose-600 shrink-0" />
+                <div className="flex flex-col text-left">
+                  <span className="font-semibold text-slate-900">Exportar PDF Consolidado</span>
+                  <span className="text-[10px] text-slate-500">
+                    Com capa, auditoria e comprovantes
+                  </span>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={handleExportExcelDirect}
+                className="cursor-pointer gap-2 py-2 text-xs"
+              >
+                <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
+                <div className="flex flex-col text-left">
+                  <span className="font-semibold text-slate-900">Exportar Planilha Excel</span>
+                  <span className="text-[10px] text-slate-500">
+                    Tabela estruturada (.csv/Excel)
+                  </span>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => navigate('/reports')}
+                className="cursor-pointer gap-2 py-2 text-xs text-slate-600"
+              >
+                <ArrowLeft className="w-3.5 h-3.5 rotate-180 shrink-0 text-slate-400" />
+                <span className="text-slate-700 font-medium">Ver Central de Relatórios</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Botão Enviar / Reenviar Relatório por E-mail (Gatilho Autônomo e Separado) */}
           <Button
             size="sm"
             onClick={handleOpenTripEmailModal}
@@ -1109,16 +1241,6 @@ export default function TripDetailPage() {
               <Mail className="w-3.5 h-3.5" />
             )}
             <span>{trip.report_sent_at ? 'Reenviar por E-mail' : 'Enviar por E-mail'}</span>
-          </Button>
-
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => navigate('/reports')}
-            className="text-xs gap-1.5 shadow-sm font-semibold"
-          >
-            <FileSpreadsheet className="w-3.5 h-3.5" />
-            <span>Exportar Relatório</span>
           </Button>
 
           {/* Botão Reabrir Viagem para Admin (quando auditada ou fechada) */}
@@ -1163,8 +1285,24 @@ export default function TripDetailPage() {
         </div>
       </div>
 
+      {/* Banner de feedback de progresso ao gerar PDF direto */}
+      {generatingPdf && (
+        <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-900 flex items-center justify-between gap-3 animate-pulse shadow-2xs">
+          <div className="flex items-center gap-2">
+            <Loader2 className="w-4 h-4 text-blue-600 animate-spin shrink-0" />
+            <span className="font-semibold">
+              {pdfProgressText || 'Preparando PDF consolidado...'}
+            </span>
+          </div>
+          <span className="text-[11px] text-blue-700 bg-blue-100/80 px-2 py-0.5 rounded border border-blue-200">
+            Rasterizando comprovantes
+          </span>
+        </div>
+      )}
+
       {/* Header Section: Trip Overview Card */}
       <Card className="border border-slate-200 bg-white shadow-sm overflow-hidden">
+        {' '}
         <div className="p-5 sm:p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
           <div className="space-y-2">
             <div className="flex items-center gap-2 flex-wrap">

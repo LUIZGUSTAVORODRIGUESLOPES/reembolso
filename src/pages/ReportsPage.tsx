@@ -67,6 +67,8 @@ export default function ReportsPage() {
   const [previewOpen, setPreviewOpen] = useState(false)
   const [generatingPdf, setGeneratingPdf] = useState(false)
   const [pdfProgressText, setPdfProgressText] = useState('')
+  const [cardExportingTripId, setCardExportingTripId] = useState<string | null>(null)
+  const [cardExportingType, setCardExportingType] = useState<'excel' | 'pdf' | null>(null)
   const [thumbnailUrls, setThumbnailUrls] = useState<Record<string, string>>({})
   const [loadingThumbnails, setLoadingThumbnails] = useState(false)
 
@@ -259,6 +261,60 @@ export default function ReportsPage() {
     } finally {
       setGeneratingPdf(false)
       setPdfProgressText('')
+    }
+  }
+
+  // Exportação rápida de Excel direto pelo card da viagem
+  const handleQuickExportExcel = async (trip: Trip) => {
+    setCardExportingTripId(trip.id)
+    setCardExportingType('excel')
+    try {
+      const exps = await storageService.listExpenses(trip.id)
+      exportTripToExcel(trip, exps)
+      toast({
+        title: 'Planilha baixada!',
+        description: `Planilha Excel gerada com sucesso para a viagem ${trip.destination}.`,
+      })
+    } catch (err: any) {
+      console.error('Erro ao exportar Excel do card:', err)
+      toast({
+        title: 'Erro ao gerar planilha',
+        description: err?.message || 'Não foi possível exportar os dados da viagem.',
+        variant: 'destructive',
+      })
+    } finally {
+      setCardExportingTripId(null)
+      setCardExportingType(null)
+    }
+  }
+
+  // Exportação rápida de PDF Consolidado direto pelo card da viagem
+  const handleQuickExportPdf = async (trip: Trip) => {
+    setCardExportingTripId(trip.id)
+    setCardExportingType('pdf')
+    try {
+      const exps = await storageService.listExpenses(trip.id)
+      const collaboratorName =
+        trip.user_profile?.full_name ||
+        profile?.full_name ||
+        user?.user_metadata?.full_name ||
+        'Colaborador Solicitante'
+
+      await exportConsolidatedReportPdf(trip, exps, undefined, collaboratorName)
+      toast({
+        title: 'PDF consolidado gerado!',
+        description: `O relatório consolidado de ${trip.destination} foi aberto em nova aba.`,
+      })
+    } catch (err: any) {
+      console.error('Erro ao exportar PDF consolidado do card:', err)
+      toast({
+        title: 'Erro ao gerar PDF',
+        description: err?.message || 'Falha ao processar os comprovantes da viagem.',
+        variant: 'destructive',
+      })
+    } finally {
+      setCardExportingTripId(null)
+      setCardExportingType(null)
     }
   }
 
@@ -556,6 +612,41 @@ export default function ReportsPage() {
                     </div>
 
                     <div className="flex items-center gap-2">
+                      {/* Ações de Exportação Rápida Direta no Card */}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={cardExportingTripId === trip.id}
+                        onClick={() => handleQuickExportPdf(trip)}
+                        className="text-xs h-9 px-2.5 border-slate-200 text-rose-700 hover:bg-rose-50 hover:border-rose-200 gap-1.5"
+                        title="Gerar e abrir PDF Consolidado com todos os comprovantes"
+                      >
+                        {cardExportingTripId === trip.id && cardExportingType === 'pdf' ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-600" />
+                        ) : (
+                          <FileText className="w-3.5 h-3.5 text-rose-600" />
+                        )}
+                        <span className="hidden sm:inline">PDF</span>
+                      </Button>
+
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={cardExportingTripId === trip.id}
+                        onClick={() => handleQuickExportExcel(trip)}
+                        className="text-xs h-9 px-2.5 border-slate-200 text-emerald-700 hover:bg-emerald-50 hover:border-emerald-200 gap-1.5"
+                        title="Baixar planilha Excel estruturada (.csv)"
+                      >
+                        {cardExportingTripId === trip.id && cardExportingType === 'excel' ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600" />
+                        ) : (
+                          <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+                        )}
+                        <span className="hidden sm:inline">Excel</span>
+                      </Button>
+
                       <Button
                         variant="outline"
                         size="sm"
@@ -739,39 +830,92 @@ export default function ReportsPage() {
                   </div>
                 </div>
 
-                {/* Export Options Row */}
-                <div className="pt-3 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-2.5">
-                  <div className="flex items-center gap-2 w-full sm:w-auto">
-                    {/* Excel */}
-                    <Button
-                      size="sm"
-                      onClick={handleExportExcel}
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs gap-1.5"
-                    >
-                      <FileSpreadsheet className="w-3.5 h-3.5" />
-                      <span>Baixar em Excel</span>
-                    </Button>
+                {/* Export Options & Actions: Separação Clara entre Baixar Arquivos Diretamente e Despachar por E-mail */}
+                <div className="pt-4 border-t border-slate-200 space-y-3">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {/* Bloco 1: Baixar arquivos diretamente */}
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex flex-col justify-between gap-2.5">
+                      <div>
+                        <span className="text-[11px] font-bold text-slate-800 uppercase tracking-wide block flex items-center gap-1.5">
+                          <Download className="w-3.5 h-3.5 text-blue-600" />
+                          Baixar arquivos diretamente
+                        </span>
+                        <p className="text-[11px] text-slate-500 mt-0.5">
+                          Gere e baixe a planilha Excel ou abra o PDF consolidado com todos os
+                          comprovantes.
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {/* Consolidated PDF */}
+                        <Button
+                          size="sm"
+                          disabled={generatingPdf}
+                          onClick={handleExportPdf}
+                          className="bg-rose-600 hover:bg-rose-700 text-white text-xs gap-1.5 flex-1 min-w-[160px]"
+                        >
+                          {generatingPdf ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>Processando Anexos...</span>
+                            </>
+                          ) : (
+                            <>
+                              <FileText className="w-3.5 h-3.5" />
+                              <span>PDF Consolidado</span>
+                            </>
+                          )}
+                        </Button>
 
-                    {/* Consolidated PDF */}
-                    <Button
-                      size="sm"
-                      disabled={generatingPdf}
-                      onClick={handleExportPdf}
-                      className="bg-rose-600 hover:bg-rose-700 text-white text-xs gap-1.5 min-w-[190px]"
-                    >
-                      {generatingPdf ? (
-                        <>
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          <span>Processando Anexos...</span>
-                        </>
-                      ) : (
-                        <>
-                          <FileText className="w-3.5 h-3.5" />
-                          <span>Baixar em PDF Consolidado</span>
-                        </>
-                      )}
-                    </Button>
+                        {/* Excel */}
+                        <Button
+                          size="sm"
+                          onClick={handleExportExcel}
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs gap-1.5 flex-1 min-w-[130px]"
+                        >
+                          <FileSpreadsheet className="w-3.5 h-3.5" />
+                          <span>Planilha Excel</span>
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Bloco 2: Despachar por e-mail */}
+                    <div className="p-3 bg-blue-50/60 border border-blue-200 rounded-lg flex flex-col justify-between gap-2.5">
+                      <div>
+                        <span className="text-[11px] font-bold text-blue-900 uppercase tracking-wide block flex items-center gap-1.5">
+                          <Mail className="w-3.5 h-3.5 text-blue-700" />
+                          Despachar por e-mail
+                        </span>
+                        <p className="text-[11px] text-blue-800 mt-0.5">
+                          {selectedTrip?.report_sent_at
+                            ? 'Relatório já enviado anteriormente. Você pode reenviar com anexo atualizado.'
+                            : 'Envie a prestação de contas com o PDF consolidado direto para a controladoria.'}
+                        </p>
+                      </div>
+                      <div>
+                        <Button
+                          size="sm"
+                          onClick={handleOpenEmailModal}
+                          className={`w-full text-white text-xs gap-1.5 font-semibold ${
+                            selectedTrip?.report_sent_at
+                              ? 'bg-blue-700 hover:bg-blue-800'
+                              : 'bg-[#1e40af] hover:bg-[#1d3d9e]'
+                          }`}
+                        >
+                          {selectedTrip?.report_sent_at ? (
+                            <RotateCcw className="w-3.5 h-3.5" />
+                          ) : (
+                            <Send className="w-3.5 h-3.5" />
+                          )}
+                          <span>
+                            {selectedTrip?.report_sent_at
+                              ? 'Reenviar por E-mail'
+                              : 'Enviar por E-mail'}
+                          </span>
+                        </Button>
+                      </div>
+                    </div>
                   </div>
+
                   {generatingPdf && pdfProgressText && (
                     <div className="w-full text-center py-1">
                       <p className="text-[11px] text-blue-700 font-medium animate-pulse">
@@ -779,26 +923,6 @@ export default function ReportsPage() {
                       </p>
                     </div>
                   )}
-
-                  {/* Send Email / Reenviar por E-mail */}
-                  <Button
-                    size="sm"
-                    onClick={handleOpenEmailModal}
-                    className={`w-full sm:w-auto text-white text-xs gap-1.5 ${
-                      selectedTrip?.report_sent_at
-                        ? 'bg-blue-700 hover:bg-blue-800'
-                        : 'bg-[#1e40af] hover:bg-[#1d3d9e]'
-                    }`}
-                  >
-                    {selectedTrip?.report_sent_at ? (
-                      <RotateCcw className="w-3.5 h-3.5" />
-                    ) : (
-                      <Send className="w-3.5 h-3.5" />
-                    )}
-                    <span>
-                      {selectedTrip?.report_sent_at ? 'Reenviar por E-mail' : 'Enviar por E-mail'}
-                    </span>
-                  </Button>
                 </div>
               </div>
             </>

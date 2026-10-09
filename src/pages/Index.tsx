@@ -46,6 +46,8 @@ import {
 } from '@/components/ui/select'
 import { CreateTripModal } from '@/components/CreateTripModal'
 import { ReceiptSearchCard } from '@/components/ReceiptSearchCard'
+import { TripPhaseToggle } from '@/components/TripPhaseToggle'
+import { TripPhase, getTripPhase, countTripsByPhase } from '@/lib/tripPhase'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -97,9 +99,31 @@ export default function Index() {
     setSearchParams(newParams, { replace: true })
   }
 
+  const [phaseFilter, setPhaseFilter] = useState<TripPhase>(
+    (searchParams.get('fase') as TripPhase) || 'todas',
+  )
   const [periodFilter, setPeriodFilter] = useState<string>('todos')
   const [statusFilter, setStatusFilter] = useState<string>('todos')
   const [modalOpen, setModalOpen] = useState(false)
+
+  // Sync internal state if URL parameter 'fase' changes
+  useEffect(() => {
+    const f = (searchParams.get('fase') as TripPhase) || 'todas'
+    if (f !== phaseFilter) {
+      setPhaseFilter(f)
+    }
+  }, [searchParams])
+
+  const handlePhaseChange = (newPhase: TripPhase) => {
+    setPhaseFilter(newPhase)
+    const newParams = new URLSearchParams(searchParams)
+    if (newPhase && newPhase !== 'todas') {
+      newParams.set('fase', newPhase)
+    } else {
+      newParams.delete('fase')
+    }
+    setSearchParams(newParams, { replace: true })
+  }
 
   // Quick deletion from listing
   const [tripToDelete, setTripToDelete] = useState<Trip | null>(null)
@@ -170,11 +194,39 @@ export default function Index() {
     return Array.from(map.entries()).map(([key, label]) => ({ key, label }))
   }, [trips])
 
-  // Filter trips instantaneamente por Destino, Motivo ou Observações, preservando filtros de período e status
+  // Contagem de viagens por fase considerando os filtros complementares (período e busca por texto)
+  // para que o badge mostre a quantidade exata disponível
+  const phaseCounts = useMemo(() => {
+    const normalizedQuery = normalizeSearchText(searchQuery)
+    const tripsMatchingOtherFilters = trips.filter((t) => {
+      if (periodFilter !== 'todos' && !t.start_date.startsWith(periodFilter)) return false
+      if (statusFilter !== 'todos' && t.status !== statusFilter) return false
+      if (normalizedQuery) {
+        const destination = normalizeSearchText(t.destination)
+        const motivo = normalizeSearchText(t.motivo)
+        const notes = normalizeSearchText(t.notes)
+        const matches =
+          destination.includes(normalizedQuery) ||
+          motivo.includes(normalizedQuery) ||
+          notes.includes(normalizedQuery)
+        if (!matches) return false
+      }
+      return true
+    })
+    return countTripsByPhase(tripsMatchingOtherFilters)
+  }, [trips, periodFilter, statusFilter, searchQuery])
+
+  // Filter trips instantaneamente por Fase, Período, Status e Busca por Texto
   const filteredTrips = useMemo(() => {
     const normalizedQuery = normalizeSearchText(searchQuery)
 
     return trips.filter((t) => {
+      // Phase filter: em_aberto, empacotadas, quitadas
+      if (phaseFilter !== 'todas') {
+        const phase = getTripPhase(t)
+        if (phase !== phaseFilter) return false
+      }
+
       // Period filter: starts with year-month
       if (periodFilter !== 'todos') {
         if (!t.start_date.startsWith(periodFilter)) return false
@@ -200,7 +252,7 @@ export default function Index() {
 
       return true
     })
-  }, [trips, periodFilter, statusFilter, searchQuery])
+  }, [trips, phaseFilter, periodFilter, statusFilter, searchQuery])
 
   const confirmDeleteTrip = async () => {
     if (!tripToDelete) return
@@ -380,78 +432,94 @@ export default function Index() {
 
       {/* Trips Table Card */}
       <Card className="border border-slate-200 shadow-sm bg-white overflow-hidden">
-        {/* Table Controls & Filters */}
-        <div className="p-4 sm:p-5 border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Briefcase className="w-4 h-4 text-blue-600" />
-            <h3 className="font-bold text-slate-900 text-base">Prestação de Contas por Viagem</h3>
-            <span className="text-xs bg-slate-100 text-slate-600 font-semibold px-2 py-0.5 rounded-full">
-              {filteredTrips.length} {filteredTrips.length === 1 ? 'viagem' : 'viagens'}
-            </span>
-            {searchQuery && (
-              <span className="text-[11px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-md font-medium border border-blue-200">
-                Filtrado por: "{searchQuery}"
+        {/* Table Controls & Filters: Alternador de Fase + Filtros Específicos */}
+        <div className="p-4 sm:p-5 border-b border-slate-200 space-y-3.5">
+          {/* Linha Superior: Cabeçalho com contagem + Alternador de Fase em destaque */}
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Briefcase className="w-4 h-4 text-blue-600" />
+              <h3 className="font-bold text-slate-900 text-base">Prestação de Contas por Viagem</h3>
+              <span className="text-xs bg-slate-100 text-slate-600 font-semibold px-2 py-0.5 rounded-full">
+                {filteredTrips.length} {filteredTrips.length === 1 ? 'viagem' : 'viagens'}
               </span>
-            )}
-          </div>
-
-          <div className="flex items-center gap-3 flex-wrap">
-            {/* Campo de Busca Rápida de Viagens */}
-            <div className="relative w-full sm:w-64">
-              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-              <Input
-                type="text"
-                placeholder="Buscar destino, motivo ou notas..."
-                value={searchQuery}
-                onChange={(e) => handleSearchChange(e.target.value)}
-                className="pl-8 pr-7 h-8 text-xs bg-slate-50 border-slate-200 focus:bg-white"
-              />
               {searchQuery && (
-                <button
-                  onClick={() => handleSearchChange('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
-                  title="Limpar filtro"
-                >
-                  <X className="w-3 h-3" />
-                </button>
+                <span className="text-[11px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-md font-medium border border-blue-200">
+                  Filtrado por: "{searchQuery}"
+                </span>
               )}
             </div>
 
-            {/* Filter by Period */}
-            <div className="flex items-center gap-1.5 text-xs text-slate-600">
-              <Filter className="w-3.5 h-3.5 text-slate-400" />
-              <span className="hidden sm:inline">Período:</span>
-              <Select value={periodFilter} onValueChange={setPeriodFilter}>
-                <SelectTrigger className="w-[150px] h-8 text-xs bg-slate-50">
-                  <SelectValue placeholder="Todos os períodos" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="todos">Todos os períodos</SelectItem>
-                  {periodOptions.map((opt) => (
-                    <SelectItem key={opt.key} value={opt.key}>
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            {/* Alternador de Fase da Viagem (Em Aberto / Empacotadas / Quitadas) */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <TripPhaseToggle
+                value={phaseFilter}
+                onChange={handlePhaseChange}
+                counts={phaseCounts}
+                showAllOption={true}
+              />
             </div>
+          </div>
 
-            {/* Filter by Status */}
-            <div className="flex items-center gap-1.5 text-xs text-slate-600">
-              <span className="hidden sm:inline">Status:</span>
-              <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-[150px] h-8 text-xs bg-slate-50">
-                  <SelectValue placeholder="Todos os status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="todos">Todos os status</SelectItem>
-                  <SelectItem value="em_triagem">Em Triagem</SelectItem>
-                  <SelectItem value="com_pendencias">Com Pendências</SelectItem>
-                  <SelectItem value="auditada">Auditada</SelectItem>
-                  <SelectItem value="fechada">Fechada</SelectItem>
-                  <SelectItem value="reembolsada">Reembolsada</SelectItem>
-                </SelectContent>
-              </Select>
+          {/* Linha Inferior: Busca por texto, período, status e atalho de recibos */}
+          <div className="flex items-center justify-between gap-3 flex-wrap pt-1 border-t border-slate-100">
+            <div className="flex items-center gap-3 flex-wrap flex-1">
+              {/* Campo de Busca Rápida de Viagens */}
+              <div className="relative w-full sm:w-64">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <Input
+                  type="text"
+                  placeholder="Buscar destino, motivo ou notas..."
+                  value={searchQuery}
+                  onChange={(e) => handleSearchChange(e.target.value)}
+                  className="pl-8 pr-7 h-8 text-xs bg-slate-50 border-slate-200 focus:bg-white"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => handleSearchChange('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
+                    title="Limpar filtro"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+
+              {/* Filter by Period */}
+              <div className="flex items-center gap-1.5 text-xs text-slate-600">
+                <Filter className="w-3.5 h-3.5 text-slate-400" />
+                <span className="hidden sm:inline">Período:</span>
+                <Select value={periodFilter} onValueChange={setPeriodFilter}>
+                  <SelectTrigger className="w-[150px] h-8 text-xs bg-slate-50">
+                    <SelectValue placeholder="Todos os períodos" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="todos">Todos os períodos</SelectItem>
+                    {periodOptions.map((opt) => (
+                      <SelectItem key={opt.key} value={opt.key}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Filter by Status */}
+              <div className="flex items-center gap-1.5 text-xs text-slate-600">
+                <span className="hidden sm:inline">Status:</span>
+                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                  <SelectTrigger className="w-[150px] h-8 text-xs bg-slate-50">
+                    <SelectValue placeholder="Todos os status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="todos">Todos os status</SelectItem>
+                    <SelectItem value="em_triagem">Em Triagem</SelectItem>
+                    <SelectItem value="com_pendencias">Com Pendências</SelectItem>
+                    <SelectItem value="auditada">Auditada</SelectItem>
+                    <SelectItem value="fechada">Fechada</SelectItem>
+                    <SelectItem value="reembolsada">Reembolsada</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
 
             {/* Quick button to open receipt verification */}

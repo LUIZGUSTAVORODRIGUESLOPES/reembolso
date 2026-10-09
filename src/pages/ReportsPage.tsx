@@ -21,6 +21,8 @@ import {
   AlertCircle,
   RefreshCw,
   RotateCcw,
+  Search,
+  X,
 } from 'lucide-react'
 import { storageService } from '@/services/storageService'
 import { resolveReceiptUrl } from '@/services/receiptFileResolver'
@@ -30,9 +32,12 @@ import {
   formatCurrencyBRL,
   formatDateBR,
   formatDateRangeBR,
+  normalizeSearchText,
   CATEGORY_LABELS,
   TRIP_STATUS_CONFIG,
 } from '@/lib/formatters'
+import { TripPhaseToggle } from '@/components/TripPhaseToggle'
+import { TripPhase, getTripPhase, countTripsByPhase } from '@/lib/tripPhase'
 import { exportTripToExcel, exportConsolidatedReportPdf } from '@/services/reportExportService'
 import { reportEmailService, EmailProviderConfigStatus } from '@/services/reportEmailService'
 import { Button } from '@/components/ui/button'
@@ -60,6 +65,10 @@ export default function ReportsPage() {
 
   const [trips, setTrips] = useState<Trip[]>([])
   const [loading, setLoading] = useState(true)
+
+  // Filtros de fase e busca por texto
+  const [phaseFilter, setPhaseFilter] = useState<TripPhase>('todas')
+  const [searchQuery, setSearchQuery] = useState('')
 
   // Package / Preview modal state
   const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null)
@@ -91,6 +100,50 @@ export default function ReportsPage() {
   const [emailRawError, setEmailRawError] = useState<string | null>(null)
   const [emailSendingStep, setEmailSendingStep] = useState<string | null>(null)
   const [attachedFilesNames, setAttachedFilesNames] = useState<string[]>([])
+
+  // Contagens por categoria de fase considerando a busca por texto atual
+  const phaseCounts = React.useMemo(() => {
+    const normalizedQuery = normalizeSearchText(searchQuery)
+    const matchingTrips = trips.filter((t) => {
+      if (!normalizedQuery) return true
+      const destination = normalizeSearchText(t.destination)
+      const motivo = normalizeSearchText(t.motivo)
+      const notes = normalizeSearchText(t.notes)
+      return (
+        destination.includes(normalizedQuery) ||
+        motivo.includes(normalizedQuery) ||
+        notes.includes(normalizedQuery)
+      )
+    })
+    return countTripsByPhase(matchingTrips)
+  }, [trips, searchQuery])
+
+  // Viagens filtradas por fase e busca textual
+  const filteredTrips = React.useMemo(() => {
+    const normalizedQuery = normalizeSearchText(searchQuery)
+
+    return trips.filter((t) => {
+      // Filtro de fase
+      if (phaseFilter !== 'todas') {
+        const phase = getTripPhase(t)
+        if (phase !== phaseFilter) return false
+      }
+
+      // Filtro de busca textual (destino, motivo, notas)
+      if (normalizedQuery) {
+        const destination = normalizeSearchText(t.destination)
+        const motivo = normalizeSearchText(t.motivo)
+        const notes = normalizeSearchText(t.notes)
+        const matches =
+          destination.includes(normalizedQuery) ||
+          motivo.includes(normalizedQuery) ||
+          notes.includes(normalizedQuery)
+        if (!matches) return false
+      }
+
+      return true
+    })
+  }, [trips, phaseFilter, searchQuery])
 
   const checkProviderConfig = async (notify: boolean = false) => {
     setCheckingProvider(true)
@@ -530,26 +583,93 @@ export default function ReportsPage() {
         </div>
       </div>
 
+      {/* Filtros da Central de Relatórios: Alternador de Fase e Busca por Texto */}
+      <Card className="border border-slate-200 bg-white shadow-sm p-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          {/* Alternador de Fase (Em Aberto / Empacotadas / Quitadas) */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <TripPhaseToggle
+              value={phaseFilter}
+              onChange={setPhaseFilter}
+              counts={phaseCounts}
+              showAllOption={true}
+            />
+          </div>
+
+          {/* Busca por texto e contadores */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="relative w-full sm:w-72">
+              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <Input
+                type="text"
+                placeholder="Buscar destino, motivo ou notas..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-8 pr-7 h-8 text-xs bg-slate-50 border-slate-200 focus:bg-white"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
+                  title="Limpar filtro"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            <span className="text-xs text-slate-500 font-medium">
+              Mostrando <strong>{filteredTrips.length}</strong> de <strong>{trips.length}</strong>
+            </span>
+          </div>
+        </div>
+      </Card>
+
       {/* Trips list ready for packaging */}
       <div className="space-y-3">
         {authLoading || loading ? (
           <div className="p-12 text-center text-slate-500">
             Carregando viagens para prestação de contas...
           </div>
-        ) : trips.length === 0 ? (
-          <div className="p-12 text-center">
+        ) : filteredTrips.length === 0 ? (
+          <div className="p-12 text-center bg-white border border-slate-200 rounded-xl">
             <Package className="w-10 h-10 text-slate-300 mx-auto mb-2" />
-            <h4 className="font-semibold text-slate-700 text-sm">Nenhuma viagem disponível</h4>
-            <Button
-              size="sm"
-              onClick={() => navigate('/')}
-              className="mt-3 bg-[#1e40af] text-white text-xs"
-            >
-              Ir ao Dashboard
-            </Button>
+            <h4 className="font-semibold text-slate-700 text-sm">
+              {trips.length === 0
+                ? 'Nenhuma viagem disponível'
+                : 'Nenhuma viagem encontrada com os filtros selecionados'}
+            </h4>
+            <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+              {trips.length === 0
+                ? 'Cadastre viagens no painel principal para gerar e despachar relatórios.'
+                : 'Tente alterar o filtro de fase ou limpar a busca textual para visualizar outros relatórios.'}
+            </p>
+            {trips.length > 0 && (phaseFilter !== 'todas' || searchQuery) && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setPhaseFilter('todas')
+                  setSearchQuery('')
+                }}
+                className="mt-3 text-xs border-slate-300"
+              >
+                Limpar Filtros
+              </Button>
+            )}
+            {trips.length === 0 && (
+              <Button
+                size="sm"
+                onClick={() => navigate('/')}
+                className="mt-3 bg-[#1e40af] text-white text-xs"
+              >
+                Ir ao Dashboard
+              </Button>
+            )}
           </div>
         ) : (
-          trips.map((trip) => {
+          filteredTrips.map((trip) => {
             const statusConf = TRIP_STATUS_CONFIG[trip.status]
             return (
               <Card

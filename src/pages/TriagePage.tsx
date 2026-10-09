@@ -84,10 +84,11 @@ export default function TriagePage() {
     try {
       const allTrips = await storageService.listTrips()
       const allExpenses = await storageService.listExpenses()
-      // Filter unverified first, or fall back to all if all are verified
-      const unverified = allExpenses.filter((e) => !e.is_verified)
-      // Sort with oldest created first so receipts upload sequence is respected
-      const listToReview = (unverified.length > 0 ? unverified : allExpenses)
+      // A fila de triagem contém APENAS comprovantes pendentes de conferência (is_verified = false).
+      // Sem fallback para despesas já verificadas: quando não há pendentes, a página exibe o
+      // estado vazio "Nenhum comprovante pendente de triagem!".
+      const listToReview = allExpenses
+        .filter((e) => !e.is_verified)
         .slice()
         .sort((a, b) => {
           // Receipts that have extracted amounts or dates should be prioritized or in natural order
@@ -282,7 +283,11 @@ export default function TriagePage() {
       showExpenseDeletedUndoToast({
         expense: deletedExp,
         onRestored: (restored) => {
-          setExpenses((prev) => [restored, ...prev])
+          // Somente comprovantes ainda pendentes (is_verified = false) voltam para a fila
+          // de triagem; itens já conferidos permanecem fora da fila sem quebrar o toast.
+          if (!restored.is_verified) {
+            setExpenses((prev) => [restored, ...prev])
+          }
         },
       })
     } catch (err: any) {

@@ -237,9 +237,9 @@ function buildConsolidatedHtml(
           </tbody>
         </table>
 
-        <div class="total-box">
-          <span style="color: #64748b; font-size: 12px;">TOTAL GERAL REEMBOLSÁVEL:</span>
-          <div class="total-amount">${formatCurrencyBRL(trip.total_amount)}</div>
+        <div class="total-box" style="margin-top: 20px; display: flex; justify-content: flex-end; align-items: baseline; gap: 12px;">
+          <span style="color: #64748b; font-size: 11px; font-weight: bold; text-transform: uppercase;">TOTAL GERAL REEMBOLSÁVEL:</span>
+          <span class="total-amount" style="font-size: 20px; font-weight: 800; color: #10b981; white-space: nowrap;">${formatCurrencyBRL(trip.total_amount)}</span>
         </div>
 
         <div style="margin-top: 48px; display: flex; justify-content: space-between; font-size: 11px; color: #64748b;">
@@ -574,15 +574,27 @@ export async function generateConsolidatedReportBlob(
   curY += 3
   doc.setDrawColor(203, 213, 225)
   doc.line(margin, curY, margin + contentWidth, curY)
-  curY += 6
+  curY += 7
 
+  const formattedTotal = formatCurrencyBRL(trip.total_amount)
   doc.setFont('helvetica', 'bold')
-  doc.setFontSize(9)
-  doc.setTextColor(71, 85, 105)
-  doc.text('TOTAL GERAL REEMBOLSÁVEL:', margin + contentWidth - 65, curY)
-  doc.setTextColor(16, 185, 129)
   doc.setFontSize(12)
-  doc.text(formatCurrencyBRL(trip.total_amount), margin + contentWidth - 2, curY, {
+  const totalValueWidth = doc.getTextWidth(formattedTotal)
+  const totalValueRightX = margin + contentWidth - 2
+
+  // Valor em verde alinhado à direita
+  doc.setTextColor(16, 185, 129)
+  doc.text(formattedTotal, totalValueRightX, curY, {
+    align: 'right',
+  })
+
+  // Rótulo posicionado com margem de segurança à esquerda do valor (alinhado à direita do rótulo)
+  // para NUNCA se sobrepor, independente do tamanho do rótulo ou do valor
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(8.5)
+  doc.setTextColor(71, 85, 105)
+  const labelRightX = totalValueRightX - totalValueWidth - 4
+  doc.text('TOTAL GERAL REEMBOLSÁVEL:', labelRightX, curY, {
     align: 'right',
   })
 

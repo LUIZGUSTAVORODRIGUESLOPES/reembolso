@@ -47,6 +47,8 @@ import { showExpenseDeletedUndoToast } from '@/services/undoService'
 import { useAuth } from '@/hooks/use-auth'
 import { CreateTripModal } from '@/components/CreateTripModal'
 import { DocumentViewer } from '@/components/DocumentViewer'
+import { TripSelectorWithUnlock } from '@/components/TripSelectorWithUnlock'
+import { ReopenTripModal } from '@/components/ReopenTripModal'
 
 export default function TriagePage() {
   const navigate = useNavigate()
@@ -73,6 +75,8 @@ export default function TriagePage() {
   // Dialogs
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [createTripOpen, setCreateTripOpen] = useState(false)
+  const [tripToUnlock, setTripToUnlock] = useState<Trip | null>(null)
+  const [unlockModalOpen, setUnlockModalOpen] = useState(false)
 
   const loadData = async () => {
     if (!user) {
@@ -604,26 +608,29 @@ export default function TriagePage() {
                     + Criar nova viagem
                   </button>
                 </div>
-                <Select value={assignedTripId} onValueChange={setAssignedTripId}>
-                  <SelectTrigger className="text-sm bg-slate-50 focus:bg-white">
-                    <SelectValue placeholder="Selecione a viagem" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {trips.map((tr) => {
-                      const locked = storageService.isTripLocked(tr.status)
-                      return (
-                        <SelectItem key={tr.id} value={tr.id} disabled={locked}>
-                          {tr.destination} ({formatDateBR(tr.start_date)})
-                          {locked ? ' 🔒 (Bloqueada)' : ''}
-                        </SelectItem>
-                      )
-                    })}
-                  </SelectContent>
-                </Select>
+                <TripSelectorWithUnlock
+                  value={assignedTripId}
+                  onChange={(newId) => {
+                    if (newId === 'new') {
+                      setCreateTripOpen(true)
+                    } else {
+                      setAssignedTripId(newId)
+                    }
+                  }}
+                  trips={trips}
+                  allowCreateNew={true}
+                  createNewText="+ Criar nova viagem"
+                  placeholder="Selecione a viagem"
+                  className="w-full text-sm h-10 bg-slate-50 focus:bg-white"
+                  onUnlockClick={(tr) => {
+                    setTripToUnlock(tr)
+                    setUnlockModalOpen(true)
+                  }}
+                />
                 {isAssignedTripLocked && (
                   <p className="text-[11px] text-amber-700 bg-amber-50 p-1.5 rounded border border-amber-200">
                     ⚠️ A viagem selecionada está com status bloqueado para adição/edição de
-                    despesas. Selecione outra viagem aberta.
+                    despesas. Desbloqueie a viagem pelo cadeado ou selecione outra viagem aberta.
                   </p>
                 )}
               </div>
@@ -734,6 +741,24 @@ export default function TriagePage() {
         onCreated={(newTrip) => {
           setTrips((prev) => [newTrip, ...prev])
           setAssignedTripId(newTrip.id)
+        }}
+      />
+
+      {/* Modal Compartilhado de Reabertura de Viagem */}
+      <ReopenTripModal
+        open={unlockModalOpen}
+        onOpenChange={(open) => {
+          setUnlockModalOpen(open)
+          if (!open) setTripToUnlock(null)
+        }}
+        trip={tripToUnlock}
+        onSuccess={(reopenedTrip) => {
+          setTrips((prev) => prev.map((t) => (t.id === reopenedTrip.id ? reopenedTrip : t)))
+          setAssignedTripId(reopenedTrip.id)
+          toast({
+            title: 'Viagem reaberta com sucesso!',
+            description: `A viagem "${reopenedTrip.destination}" está desbloqueada e pronta para receber este comprovante.`,
+          })
         }}
       />
     </div>

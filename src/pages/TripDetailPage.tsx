@@ -97,6 +97,7 @@ import { useToast } from '@/hooks/use-toast'
 import { showExpenseDeletedUndoToast, showTripDeletedUndoToast } from '@/services/undoService'
 import { useAuth } from '@/hooks/use-auth'
 import { SettleTripModal } from '@/components/SettleTripModal'
+import { ReopenTripModal } from '@/components/ReopenTripModal'
 import { supabase } from '@/lib/supabase/client'
 
 export default function TripDetailPage() {
@@ -180,8 +181,6 @@ export default function TripDetailPage() {
 
   // Reopen Trip Modal (Governança: apenas admin, motivo min 10 chars)
   const [reopenDialogOpen, setReopenDialogOpen] = useState(false)
-  const [reopenReason, setReopenReason] = useState('')
-  const [reopeningTrip, setReopeningTrip] = useState(false)
 
   // Send / Resend Email Modal
   const [emailModalOpen, setEmailModalOpen] = useState(false)
@@ -976,55 +975,6 @@ export default function TripDetailPage() {
     }
   }
 
-  // Executar reabertura da viagem (Governança: apenas admin, motivo min 10 chars)
-  const handleConfirmReopenTrip = async () => {
-    if (!trip || !isAdmin) return
-    const reason = reopenReason.trim()
-    if (!reason || reason.length < 10) {
-      toast({
-        title: 'Motivo insuficiente',
-        description: 'Por favor, descreva o motivo da reabertura com no mínimo 10 caracteres.',
-        variant: 'destructive',
-      })
-      return
-    }
-
-    setReopeningTrip(true)
-    try {
-      const currentUserName =
-        profile?.full_name ||
-        user?.user_metadata?.full_name ||
-        user?.user_metadata?.name ||
-        user?.email ||
-        'Administrador'
-
-      await storageService.reopenTrip({
-        tripId: trip.id,
-        reason,
-        user: user ? { id: user.id, name: currentUserName } : null,
-      })
-
-      toast({
-        title: 'Viagem reaberta com sucesso!',
-        description:
-          'A viagem voltou para o status "Em Triagem". Comprovantes e dados cadastrais agora estão desbloqueados para ajustes.',
-      })
-
-      setReopenDialogOpen(false)
-      setReopenReason('')
-      await loadTripData()
-    } catch (err: any) {
-      console.error('Erro ao reabrir viagem:', err)
-      toast({
-        title: 'Falha ao reabrir viagem',
-        description: storageService.formatDatabaseError(err),
-        variant: 'destructive',
-      })
-    } finally {
-      setReopeningTrip(false)
-    }
-  }
-
   if (authLoading || loading || !trip) {
     return (
       <div className="p-12 text-center text-slate-500">
@@ -1211,10 +1161,7 @@ export default function TripDetailPage() {
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => {
-                  setReopenReason('')
-                  setReopenDialogOpen(true)
-                }}
+                onClick={() => setReopenDialogOpen(true)}
                 className="bg-amber-100/80 hover:bg-amber-200/80 text-amber-900 border-amber-300 text-xs font-semibold gap-1.5"
               >
                 <Unlock className="w-3.5 h-3.5 text-amber-800" />
@@ -1404,10 +1351,7 @@ export default function TripDetailPage() {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => {
-                setReopenReason('')
-                setReopenDialogOpen(true)
-              }}
+              onClick={() => setReopenDialogOpen(true)}
               className="text-xs gap-1.5 text-amber-800 border-amber-300 hover:bg-amber-50 font-semibold"
             >
               <Unlock className="w-3.5 h-3.5 text-amber-700" />
@@ -2828,81 +2772,15 @@ export default function TripDetailPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* AlertDialog de Governança: Reabrir Viagem (Exclusivo Administradores) */}
-      <AlertDialog open={reopenDialogOpen} onOpenChange={setReopenDialogOpen}>
-        <AlertDialogContent className="sm:max-w-lg">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="text-amber-900 flex items-center gap-2 text-base">
-              <Unlock className="w-5 h-5 text-amber-600" />
-              Reabertura de Viagem (Fluxo de Governança)
-            </AlertDialogTitle>
-            <AlertDialogDescription className="text-slate-600 text-xs sm:text-sm space-y-3 pt-1">
-              <p>
-                A viagem para <strong className="text-slate-900">{trip.destination}</strong> voltará
-                do status <strong className="text-amber-800">{statusConf.label}</strong> para{' '}
-                <strong className="text-blue-700">Em Triagem</strong>.
-              </p>
-
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-950 space-y-1.5 leading-relaxed">
-                <p className="font-semibold flex items-center gap-1.5 text-amber-900">
-                  <ShieldCheck className="w-4 h-4 text-amber-700" />
-                  Rastreabilidade e Desbloqueio:
-                </p>
-                <ul className="list-disc list-inside space-y-1 text-amber-900/90">
-                  <li>
-                    A viagem será desbloqueada para inclusão, edição e exclusão de comprovantes.
-                  </li>
-                  <li>O histórico e o motivo da reabertura ficarão permanentemente gravados.</li>
-                  <li>Após as correções, o relatório deverá ser reenviado.</li>
-                </ul>
-              </div>
-
-              <div className="space-y-1.5 pt-1">
-                <Label
-                  htmlFor="reopen-reason-input"
-                  className="text-xs font-semibold text-slate-800 flex items-center justify-between"
-                >
-                  <span>Motivo obrigatório da reabertura:</span>
-                  <span
-                    className={`text-[11px] font-normal ${reopenReason.trim().length >= 10 ? 'text-emerald-600' : 'text-slate-400'}`}
-                  >
-                    {reopenReason.trim().length}/10 caracteres mín.
-                  </span>
-                </Label>
-                <Textarea
-                  id="reopen-reason-input"
-                  rows={3}
-                  value={reopenReason}
-                  onChange={(e) => setReopenReason(e.target.value)}
-                  placeholder="Ex: Correção de comprovante duplicado de alimentação e ajuste de valor do táxi..."
-                  className="text-xs resize-none"
-                  disabled={reopeningTrip}
-                />
-              </div>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter className="pt-2">
-            <AlertDialogCancel disabled={reopeningTrip}>Cancelar</AlertDialogCancel>
-            <Button
-              onClick={handleConfirmReopenTrip}
-              disabled={reopeningTrip || reopenReason.trim().length < 10}
-              className="bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs gap-1.5"
-            >
-              {reopeningTrip ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span>Reabrindo Viagem...</span>
-                </>
-              ) : (
-                <>
-                  <Unlock className="w-3.5 h-3.5" />
-                  <span>Confirmar Reabertura</span>
-                </>
-              )}
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {/* Modal de Reabertura de Viagem (Fluxo de Governança Compartilhado) */}
+      <ReopenTripModal
+        open={reopenDialogOpen}
+        onOpenChange={setReopenDialogOpen}
+        trip={trip}
+        onSuccess={() => {
+          loadTripData()
+        }}
+      />
 
       {/* Modal de Envio / Reenvio de Relatório por E-mail */}
       <Dialog open={emailModalOpen} onOpenChange={setEmailModalOpen}>

@@ -26,15 +26,10 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { useToast } from '@/hooks/use-toast'
 import { useAuth } from '@/hooks/use-auth'
+import { TripSelectorWithUnlock } from '@/components/TripSelectorWithUnlock'
+import { ReopenTripModal } from '@/components/ReopenTripModal'
 
 interface QueueFile {
   id: string
@@ -71,6 +66,11 @@ export default function UploadPage() {
   const [currentProcessingFile, setCurrentProcessingFile] = useState<string | null>(null)
   const [currentStepMessage, setCurrentStepMessage] = useState<string>('')
   const [aiSuggestions, setAiSuggestions] = useState<AiTripSuggestion[]>([])
+
+  // Modal de desbloqueio de viagem a partir do seletor
+  const [tripToUnlock, setTripToUnlock] = useState<Trip | null>(null)
+  const [unlockModalOpen, setUnlockModalOpen] = useState(false)
+  const [targetQueueItemId, setTargetQueueItemId] = useState<string | null>(null)
 
   useEffect(() => {
     if (authLoading) return
@@ -296,6 +296,31 @@ export default function UploadPage() {
     setQueue((prev) =>
       prev.map((item) => (item.id === fileId ? { ...item, assignedTripId: tripId } : item)),
     )
+  }
+
+  const handleOpenUnlockModal = (trip: Trip, queueItemId?: string) => {
+    setTripToUnlock(trip)
+    setTargetQueueItemId(queueItemId || null)
+    setUnlockModalOpen(true)
+  }
+
+  const handleTripUnlockedSuccess = (reopenedTrip: Trip) => {
+    // Atualiza a lista de viagens existentes em memória para refletir status 'em_triagem'
+    setExistingTrips((prev) => prev.map((t) => (t.id === reopenedTrip.id ? reopenedTrip : t)))
+
+    // Se o desbloqueio veio de um item específico da fila, já seleciona automaticamente essa viagem desbloqueada para ele
+    if (targetQueueItemId) {
+      setQueue((prev) =>
+        prev.map((item) =>
+          item.id === targetQueueItemId ? { ...item, assignedTripId: reopenedTrip.id } : item,
+        ),
+      )
+    }
+
+    toast({
+      title: 'Viagem reaberta com sucesso!',
+      description: `A viagem "${reopenedTrip.destination}" está desbloqueada. Você já pode incluir o comprovante nela.`,
+    })
   }
 
   // Save all processed receipts to Supabase storage and navigate to Triage
@@ -764,29 +789,16 @@ export default function UploadPage() {
                             )}
                           </div>
 
-                          {/* Trip link dropdown */}
+                          {/* Trip link dropdown com atalho de desbloqueio */}
                           <div className="flex items-center gap-1.5">
                             <span className="text-[11px] text-slate-400">Viagem:</span>
-                            <Select
+                            <TripSelectorWithUnlock
                               value={item.assignedTripId || 'new'}
-                              onValueChange={(val) => handleTripAssignmentChange(item.id, val)}
-                            >
-                              <SelectTrigger className="w-[180px] h-8 text-xs bg-slate-50">
-                                <SelectValue placeholder="Vincular à viagem" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {existingTrips.map((tr) => {
-                                  const locked = storageService.isTripLocked(tr.status)
-                                  return (
-                                    <SelectItem key={tr.id} value={tr.id} disabled={locked}>
-                                      {tr.destination} ({formatDateBR(tr.start_date)})
-                                      {locked ? ' 🔒 (Bloqueada)' : ''}
-                                    </SelectItem>
-                                  )
-                                })}
-                                <SelectItem value="new">+ Criar Nova Viagem (IA)</SelectItem>
-                              </SelectContent>
-                            </Select>
+                              onChange={(val) => handleTripAssignmentChange(item.id, val)}
+                              trips={existingTrips}
+                              onUnlockClick={(tr) => handleOpenUnlockModal(tr, item.id)}
+                              className="w-[200px]"
+                            />
                           </div>
                         </div>
                       ) : (
@@ -852,6 +864,19 @@ export default function UploadPage() {
           )}
         </div>
       )}
+      {/* Modal Compartilhado de Reabertura de Viagem (Governança) */}
+      <ReopenTripModal
+        open={unlockModalOpen}
+        onOpenChange={(open) => {
+          setUnlockModalOpen(open)
+          if (!open) {
+            setTripToUnlock(null)
+            setTargetQueueItemId(null)
+          }
+        }}
+        trip={tripToUnlock}
+        onSuccess={handleTripUnlockedSuccess}
+      />
     </div>
   )
 }

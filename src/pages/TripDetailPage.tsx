@@ -434,7 +434,7 @@ export default function TripDetailPage() {
 
   const handleSaveJustification = async () => {
     if (!justifyingRule || !trip) return
-    if (storageService.isTripLocked(trip.status)) {
+    if (storageService.isTripLocked(trip)) {
       toast({
         title: 'Ação não permitida',
         description:
@@ -506,7 +506,7 @@ export default function TripDetailPage() {
     e.preventDefault()
     if (!trip) return
 
-    if (storageService.isTripLocked(trip.status)) {
+    if (storageService.isTripLocked(trip)) {
       toast({
         title: 'Viagem bloqueada',
         description:
@@ -606,7 +606,7 @@ export default function TripDetailPage() {
   }
 
   const handleOpenEditExpense = (exp: Expense) => {
-    if (storageService.isTripLocked(trip?.status)) {
+    if (storageService.isTripLocked(trip)) {
       toast({
         title: 'Edição bloqueada',
         description:
@@ -650,7 +650,7 @@ export default function TripDetailPage() {
     e.preventDefault()
     if (!editingExpense || !trip) return
 
-    if (storageService.isTripLocked(trip.status)) {
+    if (storageService.isTripLocked(trip)) {
       toast({
         title: 'Edição bloqueada',
         description:
@@ -673,7 +673,7 @@ export default function TripDetailPage() {
     const targetTripId = editExpTripId || trip.id
     const targetTrip =
       userTrips.find((t) => t.id === targetTripId) || (targetTripId === trip.id ? trip : null)
-    if (targetTrip && storageService.isTripLocked(targetTrip.status)) {
+    if (targetTrip && storageService.isTripLocked(targetTrip)) {
       toast({
         title: 'Viagem de destino bloqueada',
         description:
@@ -1111,7 +1111,7 @@ export default function TripDetailPage() {
   const auditPercent = totalRules > 0 ? Math.round((passedRules / totalRules) * 100) : 100
   const effectiveStatus = getEffectiveTripStatus(trip)
   const statusConf = TRIP_STATUS_CONFIG[effectiveStatus]
-  const isTripLocked = storageService.isTripLocked(effectiveStatus)
+  const isTripLocked = storageService.isTripLocked(trip)
 
   // Manual Audit Progress (conferência humana de cada lançamento)
   // O contador é derivado EXCLUSIVAMENTE do estado real dos lançamentos
@@ -1388,16 +1388,37 @@ export default function TripDetailPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setEditTripOpen(true)}
+            onClick={() => {
+              setEditDestination(trip.destination)
+              setEditStartDate(trip.start_date)
+              setEditEndDate(trip.end_date)
+              setEditMotivo(trip.motivo || '')
+              setEditStatus(trip.status)
+              setEditTripOpen(true)
+            }}
             className="text-xs gap-1.5"
           >
-            {trip.status === 'reembolsada' || trip.status === 'fechada' || trip.report_sent_at ? (
+            {trip.status === 'reembolsada' ||
+            trip.status === 'fechada' ||
+            (Boolean(trip.report_sent_at) &&
+              !(
+                trip.status === 'em_triagem' &&
+                Boolean(trip.reopened_at) &&
+                (!trip.report_sent_at || (trip.reopened_at ?? '') >= (trip.report_sent_at ?? ''))
+              )) ? (
               <Lock className="w-3.5 h-3.5 text-slate-500" />
             ) : (
               <Edit className="w-3.5 h-3.5 text-blue-600" />
             )}
             <span>
-              {trip.status === 'reembolsada' || trip.status === 'fechada' || trip.report_sent_at
+              {trip.status === 'reembolsada' ||
+              trip.status === 'fechada' ||
+              (Boolean(trip.report_sent_at) &&
+                !(
+                  trip.status === 'em_triagem' &&
+                  Boolean(trip.reopened_at) &&
+                  (!trip.report_sent_at || (trip.reopened_at ?? '') >= (trip.report_sent_at ?? ''))
+                ))
                 ? 'Ver / Alterar Status'
                 : 'Editar Viagem'}
             </span>

@@ -376,8 +376,34 @@ class SupabaseStorageService {
    * Quando bloqueada, despesas não podem ser inseridas/alteradas/excluídas
    * e dados principais da viagem não podem ser alterados.
    */
-  public isTripLocked(status?: TripStatus | string | null): boolean {
-    if (!status) return false
+  public isTripLocked(
+    tripOrStatus?:
+      | Trip
+      | {
+          status?: TripStatus | string | null
+          reopened_at?: string | null
+          report_sent_at?: string | null
+        }
+      | TripStatus
+      | string
+      | null,
+  ): boolean {
+    if (!tripOrStatus) return false
+    if (typeof tripOrStatus === 'object') {
+      const st = tripOrStatus.status
+      if (!st) return false
+      // Se for reembolsada ou fechada, é bloqueada
+      if (st === 'reembolsada' || st === 'fechada') return true
+      if (st === 'auditada') {
+        const isReopened =
+          Boolean(tripOrStatus.reopened_at) &&
+          (!tripOrStatus.report_sent_at ||
+            (tripOrStatus.reopened_at ?? '') >= (tripOrStatus.report_sent_at ?? ''))
+        return !isReopened
+      }
+      return false
+    }
+    const status = tripOrStatus
     return status === 'auditada' || status === 'fechada' || status === 'reembolsada'
   }
 

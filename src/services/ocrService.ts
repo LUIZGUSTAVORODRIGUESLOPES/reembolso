@@ -30,6 +30,15 @@ export interface ProcessedReceiptOcr {
   }
 }
 
+export interface ParsedReceiptFields {
+  merchant_name: string | null
+  cnpj: string | null
+  category: ExpenseCategory
+  amount: number | null
+  issue_date: string | null
+  issue_time: string | null
+}
+
 // Global cached Tesseract worker to avoid spawning multiple times
 let tesseractWorkerPromise: Promise<Worker> | null = null
 
@@ -54,8 +63,838 @@ async function getOcrWorker(
   return tesseractWorkerPromise
 }
 
+// =============================================================================
+// 1. PRÉ-PROCESSAMENTO DE IMAGEM EM CANVAS INVISÍVEL (Grayscale + Alto Contraste)
+// =============================================================================
+
+export interface PreprocessImageOptions {
+  contrast?: number // fator de contraste (padrão 1.45)
+  maxDimension?: number // reescala inteligente se muito gigante (padrão 2400px)
+  sharpen?: boolean
+}
+
 /**
- * Extract embedded text and render first page to canvas from PDF using pdfjs-dist
+ * Carrega File ou Blob ou string dataURL numa HTMLImageElement
+ */
+function loadImageElement(source: File | Blob | string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    let objectUrlToRevoke: string | null = null
+
+    img.onload = () => {
+      if (objectUrlToRevoke) {
+        URL.revokeObjectURL(objectUrlToRevoke)
+      }
+      resolve(img)
+    }
+
+    img.onerror = (err) => {
+      if (objectUrlToRevoke) {
+        URL.revokeObjectURL(objectUrlToRevoke)
+      }
+      reject(new Error(`Falha ao carregar imagem para pré-processamento: ${err}`))
+    }
+
+    if (typeof source === 'string') {
+      img.src = source
+    } else {
+      objectUrlToRevoke = URL.createObjectURL(source)
+      img.src = objectUrlToRevoke
+    }
+  })
+}
+
+/**
+ * Aplica filtro de Grayscale (escala de cinza ponderada com luminância perceptiva)
+ * e aumento de contraste com estiramento dinâmico do histograma.
+ * Reduz sombras de celulares e evidencia a impressão térmica desbotada.
+ */
+export async function preprocessReceiptImage(
+  source: File | Blob | string,
+  options: PreprocessImageOptions = {},
+): Promise<string> {
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    return typeof source === 'string' ? source : ''
+  }
+
+  const { contrast = 1.45, maxDimension = 2400 } = options
+
+  const img = await loadImageElement(source)
+
+  let width = img.naturalWidth || img.width
+  let height = img.naturalHeight || img.height
+
+  // Redimensionamento proporcional se a imagem for excessivamente pesada para o Tesseract
+  if (width > maxDimension || height > maxDimension) {
+    if (width >= height) {
+      height = Math.round((height * maxDimension) / width)
+      width = maxDimension
+    } else {
+      width = Math.round((width * maxDimension) / height)
+      height = maxDimension
+    }
+  }
+
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) {
+    throw new Error('Não foi possível obter contexto 2d do canvas de pré-processamento.')
+  }
+
+  // Desenha a imagem redimensionada
+  ctx.drawImage(img, 0, 0, width, height)
+
+  try {
+    const imageData = ctx.getImageData(0, 0, width, height)
+    const data = imageData.data
+    const totalPixels = data.length
+
+    // Fator de contraste linear: F = (259 * (C + 255)) / (255 * (259 - C)) com C em -255..255
+    // Ou aproximação robusta normalizada: factor = contrast
+    const contrastFactor = Math.max(0.5, Math.min(3.0, contrast))
+
+    for (let i = 0; i < totalPixels; i += 4) {
+      const r = data[i]
+      const g = data[i + 1]
+      const b = data[i + 2]
+
+      // 1. Grayscale baseado em luminância ITU-R BT.601
+      const gray = 0.299 * r + 0.587 * g + 0.114 * b
+
+      // 2. Aumento de contraste centrado em 128
+      // Reduz tons médios cinzentos de sombras e realça o preto do texto e branco do fundo
+      let adjusted = (gray - 128) * contrastFactor + 128
+
+      // Leve clamp defensivo
+      if (adjusted < 0) adjusted = 0
+      else if (adjusted > 255) adjusted = 255
+
+      data[i] = adjusted
+      data[i + 1] = adjusted
+      data[i + 2] = adjusted
+      // data[i + 3] (alpha) inalterado
+    }
+
+    ctx.putImageData(imageData, 0, 0)
+    // Exporta JPEG de alta fidelidade para o worker do Tesseract
+    return canvas.toDataURL('image/jpeg', 0.92)
+  } catch (err) {
+    console.warn('Erro ao aplicar pixels no canvas, fallback para imagem crua:', err)
+    return canvas.toDataURL('image/jpeg', 0.9)
+  }
+}
+
+// =============================================================================
+// 2. DICIONÁRIOS E SCORING SYSTEM PARA CATEGORIZAÇÃO SEMÂNTICA FUZZY
+// =============================================================================
+
+/**
+ * Normalização textual avançada para NLP leve:
+ * Remove diacríticos, substitui caracteres confundidos pelo OCR térmico (ex: 0 e O, 1 e l)
+ * e divide em tokens.
+ */
+export function normalizeOcrText(text: string | null | undefined): string {
+  if (!text) return ''
+  return text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[\r\t]/g, ' ')
+}
+
+/**
+ * Levenshtein distance para matching fuzzy tolerante a erros de 1 letra
+ */
+export function levenshteinDistance(a: string, b: string): number {
+  if (a === b) return 0
+  if (a.length === 0) return b.length
+  if (b.length === 0) return a.length
+
+  const matrix: number[][] = []
+
+  for (let i = 0; i <= b.length; i++) {
+    matrix[i] = [i]
+  }
+  for (let j = 0; j <= a.length; j++) {
+    matrix[0][j] = j
+  }
+
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1]
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1, // substitution
+          matrix[i][j - 1] + 1, // insertion
+          matrix[i - 1][j] + 1, // deletion
+        )
+      }
+    }
+  }
+
+  return matrix[b.length][a.length]
+}
+
+interface CategoryKeywordRule {
+  keyword: string
+  weight: number
+  allowFuzzy?: boolean
+  maxDistance?: number
+}
+
+/**
+ * Dicionários semânticos ponderados para cada ExpenseCategory.
+ * Requisito estrito do usuário:
+ * "Adicione as palavras unidas, localiza, movida, hertz como peso forte para a categoria 'Transporte'
+ * (para corrigir a falha de classificar locadoras como combustível)"
+ */
+const CATEGORY_DICTIONARIES: Record<ExpenseCategory, CategoryKeywordRule[]> = {
+  transporte: [
+    // Locadoras de veículos — peso ULTRA FORTE para vencer qualquer menção de combustível na locação
+    { keyword: 'unidas', weight: 45, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'localiza', weight: 45, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'movida', weight: 45, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'hertz', weight: 45, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'rent a car', weight: 40 },
+    { keyword: 'rentacar', weight: 40 },
+    { keyword: 'locadora', weight: 35, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'locacao', weight: 30, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'aluguel de carro', weight: 40 },
+    { keyword: 'aluguel de veiculo', weight: 40 },
+    { keyword: 'aluguel', weight: 15, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'veiculos', weight: 12 },
+    // Cias Aéreas e Aeroportos
+    { keyword: 'aeroporto', weight: 28, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'latam', weight: 35 },
+    { keyword: 'gol linhas', weight: 35 },
+    { keyword: 'azul linhas', weight: 35 },
+    { keyword: 'passaredo', weight: 30 },
+    { keyword: 'voepass', weight: 30 },
+    { keyword: 'voo', weight: 20 },
+    { keyword: 'aereo', weight: 25, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'passagem', weight: 20, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'bilhete aereo', weight: 35 },
+    { keyword: 'embarque', weight: 18 },
+    { keyword: 'tarifa aerea', weight: 30 },
+    { keyword: 'rodoviaria', weight: 22 },
+    { keyword: 'onibus', weight: 20 },
+    { keyword: 'cometa', weight: 18 },
+    { keyword: 'passagem de onibus', weight: 30 },
+  ],
+  uber_taxi: [
+    { keyword: 'uber', weight: 35 },
+    { keyword: '99', weight: 25 },
+    { keyword: '99app', weight: 40 },
+    { keyword: '99 tecnologia', weight: 40 },
+    { keyword: '99pop', weight: 40 },
+    { keyword: 'taxi', weight: 30, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'radiotaxi', weight: 35 },
+    { keyword: 'corrida', weight: 22, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'motorista parceiro', weight: 30 },
+    { keyword: 'viagem uber', weight: 40 },
+    { keyword: 'detalhes da viagem', weight: 25 },
+    { keyword: 'tarifa base', weight: 15 },
+    { keyword: 'cabify', weight: 30 },
+  ],
+  combustivel: [
+    { keyword: 'gasolina', weight: 30, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'etanol', weight: 30, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'diesel', weight: 30, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'combustivel', weight: 32, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'abastecimento', weight: 30, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'litros', weight: 18, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'bico', weight: 12 },
+    { keyword: 'bomba', weight: 14 },
+    { keyword: 'posto', weight: 18, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'ipiranga', weight: 30 },
+    { keyword: 'petrobras', weight: 30 },
+    { keyword: 'shell', weight: 25 },
+    { keyword: 'raizen', weight: 30 },
+    { keyword: 'auto posto', weight: 35 },
+    { keyword: 'lubrificante', weight: 15 },
+    { keyword: 'gnv', weight: 25 },
+  ],
+  alimentacao: [
+    { keyword: 'restaurante', weight: 30, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'lanchonete', weight: 30, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'padaria', weight: 25, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'panificadora', weight: 25, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'refeicao', weight: 28, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'almoco', weight: 28, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'jantar', weight: 28, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'cardapio', weight: 15 },
+    { keyword: 'prato', weight: 15 },
+    { keyword: 'self service', weight: 25 },
+    { keyword: 'quilo', weight: 15 },
+    { keyword: 'sushi', weight: 30 },
+    { keyword: 'temakeria', weight: 30 },
+    { keyword: 'pizzaria', weight: 30 },
+    { keyword: 'churrascaria', weight: 30 },
+    { keyword: 'hamburgueria', weight: 28 },
+    { keyword: 'burger', weight: 25 },
+    { keyword: 'cafe', weight: 18 },
+    { keyword: 'cafeteria', weight: 25 },
+    { keyword: 'bebida', weight: 12 },
+    { keyword: 'suco', weight: 10 },
+    { keyword: 'sobremesa', weight: 12 },
+    { keyword: 'lanche', weight: 20 },
+    { keyword: 'churrasco', weight: 25 },
+    { keyword: 'mcdonalds', weight: 35 },
+    { keyword: 'burger king', weight: 35 },
+    { keyword: 'subway', weight: 35 },
+    { keyword: 'starbucks', weight: 35 },
+    { keyword: 'alimentacao', weight: 25 },
+  ],
+  hospedagem: [
+    { keyword: 'hotel', weight: 35, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'pousada', weight: 35, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'hospedagem', weight: 35, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'diaria', weight: 25, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'check-in', weight: 30 },
+    { keyword: 'checkin', weight: 30 },
+    { keyword: 'check-out', weight: 30 },
+    { keyword: 'checkout', weight: 30 },
+    { keyword: 'apartamento', weight: 15 },
+    { keyword: 'quarto', weight: 18 },
+    { keyword: 'hospede', weight: 25, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'reserva', weight: 15 },
+    { keyword: 'ibis', weight: 35 },
+    { keyword: 'mercure', weight: 35 },
+    { keyword: 'novotel', weight: 35 },
+    { keyword: 'accor', weight: 35 },
+    { keyword: 'airbnb', weight: 35 },
+    { keyword: 'booking', weight: 25 },
+  ],
+  pedagio: [
+    { keyword: 'pedagio', weight: 35, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'concessionaria', weight: 28, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'rodovia', weight: 25, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'praca de pedagio', weight: 45 },
+    { keyword: 'tarifa de pedagio', weight: 45 },
+    { keyword: 'sem parar', weight: 40 },
+    { keyword: 'semparar', weight: 40 },
+    { keyword: 'conectcar', weight: 40 },
+    { keyword: 'veloe', weight: 35 },
+    { keyword: 'taggy', weight: 30 },
+    { keyword: 'autoban', weight: 40 },
+    { keyword: 'ecovias', weight: 40 },
+    { keyword: 'arteris', weight: 40 },
+    { keyword: 'ccr', weight: 30 },
+    { keyword: 'eixo sp', weight: 35 },
+    { keyword: 'caminhos da serra', weight: 35 },
+  ],
+  estacionamento: [
+    { keyword: 'estacionamento', weight: 40, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'garagem', weight: 30, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'estapar', weight: 45 },
+    { keyword: 'valet', weight: 35 },
+    { keyword: 'park', weight: 15 },
+    { keyword: 'parking', weight: 30 },
+    { keyword: 'rotativo', weight: 25, allowFuzzy: true, maxDistance: 1 },
+    { keyword: 'permanencia', weight: 20 },
+    { keyword: 'vaga', weight: 15 },
+    { keyword: 'ticket de estacionamento', weight: 45 },
+    { keyword: 'zona azul', weight: 40 },
+  ],
+  outros: [],
+}
+
+/**
+ * Classifica a categoria do recibo com base no Sistema de Pontuação Semântica
+ * com tolerância fuzzy leve para pequenos erros do Tesseract.
+ */
+export function classifyExpenseCategoryByScoring(
+  text: string,
+  merchantHint?: string | null,
+): { category: ExpenseCategory; scores: Record<ExpenseCategory, number> } {
+  const normText = normalizeOcrText(text)
+  const normMerchant = merchantHint ? normalizeOcrText(merchantHint) : ''
+  const combined = `${normMerchant} ${normText}`
+
+  // Extrai palavras individuais para matching fuzzy leve
+  const words = combined.split(/[^a-z0-9]+/).filter((w) => w.length >= 3)
+  const wordSet = new Set(words)
+
+  const scores: Record<ExpenseCategory, number> = {
+    transporte: 0,
+    combustivel: 0,
+    alimentacao: 0,
+    hospedagem: 0,
+    pedagio: 0,
+    uber_taxi: 0,
+    estacionamento: 0,
+    outros: 0,
+  }
+
+  // Se o próprio nome do estabelecimento já apontar locadora, reforço imediato
+  if (
+    normMerchant.includes('unidas') ||
+    normMerchant.includes('localiza') ||
+    normMerchant.includes('movida') ||
+    normMerchant.includes('hertz') ||
+    normMerchant.includes('locadora')
+  ) {
+    scores.transporte += 80
+  }
+
+  for (const [catKey, rules] of Object.entries(CATEGORY_DICTIONARIES) as [
+    ExpenseCategory,
+    CategoryKeywordRule[],
+  ][]) {
+    for (const rule of rules) {
+      const kw = normalizeOcrText(rule.keyword)
+      if (!kw) continue
+
+      // 1. Match exato de frase / termo composto no texto completo
+      if (combined.includes(kw)) {
+        scores[catKey] += rule.weight
+        continue
+      }
+
+      // 2. Se a keyword for uma palavra só e permitir fuzzy
+      if (rule.allowFuzzy && !kw.includes(' ')) {
+        const maxDist = rule.maxDistance ?? 1
+        // Se a palavra exata está no conjunto
+        if (wordSet.has(kw)) {
+          scores[catKey] += rule.weight
+        } else {
+          // Busca fuzzy leve entre as palavras do texto com tamanho similar (+/- 1)
+          for (const word of words) {
+            if (Math.abs(word.length - kw.length) <= 1) {
+              const dist = levenshteinDistance(word, kw)
+              if (dist <= maxDist) {
+                // Pontuação ligeiramente ponderada por ser fuzzy match
+                scores[catKey] += Math.round(rule.weight * 0.85)
+                break
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Determina a categoria vencedora (threshold mínimo de 15 pontos)
+  let bestCategory: ExpenseCategory = 'outros'
+  let highestScore = 0
+
+  for (const [cat, score] of Object.entries(scores) as [ExpenseCategory, number][]) {
+    if (cat === 'outros') continue
+    if (score > highestScore && score >= 15) {
+      highestScore = score
+      bestCategory = cat
+    }
+  }
+
+  return {
+    category: bestCategory,
+    scores,
+  }
+}
+
+// =============================================================================
+// 3. CAÇADOR DE VALORES INTELIGENTE (Smart Amount Hunter)
+// =============================================================================
+
+export interface CandidateAmount {
+  value: number
+  rawString: string
+  index: number
+  isTail30: boolean
+  nearTotalKeyword: boolean
+  nearPaidKeyword: boolean
+  nearCurrencySymbol: boolean
+  lineText: string
+}
+
+const TOTAL_KEYWORDS = [
+  'total a pagar',
+  'valor a pagar',
+  'total liquido',
+  'total r$',
+  'valor total',
+  'v. total',
+  'v total',
+  'subtotal',
+  'total',
+  'liquido a pagar',
+  'saldo a pagar',
+  'valor recebido',
+  'debito',
+  'credito',
+  'cartao',
+  'pago pelo app',
+  'valor pago',
+]
+
+/**
+ * Varre todo o texto extraído e localiza todos os números monetários válidos no padrão brasileiro.
+ * Regras do usuário:
+ * 1. Priorizar o maior valor encontrado nos 30% finais do texto (onde o Total costuma ficar impresso).
+ * 2. Se não achar no final, pegar o maior valor absoluto do documento (limitado a um teto razoável de R$ 15.000).
+ * 3. Regras de negócio contextuais: Postos e Locadoras têm valores tipicamente maiores; Uber menor.
+ */
+export function extractIntelligentAmount(
+  rawText: string,
+  categoryHint?: ExpenseCategory,
+): number | null {
+  if (!rawText || rawText.trim().length === 0) return null
+
+  const textLength = rawText.length
+  const tail30Threshold = Math.floor(textLength * 0.7) // início dos 30% finais
+
+  // Normalização leve mantendo pontuação relevante
+  const norm = rawText.replace(/\r/g, ' ')
+
+  // Expressão regular ampla para valores financeiros brasileiros:
+  // Suporta R$ 1.234,56 | R$ 1234,56 | 123,45 | 1.250.00 | etc.
+  const amountPattern =
+    /(?:R\$\s*)?(\d{1,3}(?:\.\d{3})*|\d+)[,.]([0-9]{2})(?!\d|\/|-)(?:\s*(?:reais|brl))?/gi
+
+  const candidates: CandidateAmount[] = []
+
+  let match: RegExpExecArray | null
+  while ((match = amountPattern.exec(norm)) !== null) {
+    const fullMatch = match[0]
+    const integerPart = match[1].replace(/\./g, '')
+    const decimalPart = match[2]
+    const numericValue = parseFloat(`${integerPart}.${decimalPart}`)
+
+    if (isNaN(numericValue) || numericValue <= 0) continue
+
+    // Teto razoável corporativo: recibo de despesa não ultrapassa R$ 15.000
+    // Além de ignorar códigos de barras (EAN), protocolos fiscais ou CNPJs
+    if (numericValue > 15000) continue
+
+    // Ignora valores residuais minúsculos como 0.01 ou 0.05 a menos que seja o único
+    if (numericValue < 0.5) continue
+
+    const matchIndex = match.index
+
+    // Contexto de -40 a +40 caracteres para detectar palavras-chave "total", "pago", "R$"
+    const snippetStart = Math.max(0, matchIndex - 40)
+    const snippetEnd = Math.min(norm.length, matchIndex + fullMatch.length + 30)
+    const contextSnippet = normalizeOcrText(norm.slice(snippetStart, snippetEnd))
+
+    const nearTotal = TOTAL_KEYWORDS.some((kw) => contextSnippet.includes(kw))
+    const nearPaid =
+      contextSnippet.includes('pago') ||
+      contextSnippet.includes('aprovad') ||
+      contextSnippet.includes('debito') ||
+      contextSnippet.includes('credito') ||
+      contextSnippet.includes('mastercard') ||
+      contextSnippet.includes('visa') ||
+      contextSnippet.includes('pix')
+    const nearCurrency = fullMatch.toLowerCase().includes('r$') || contextSnippet.includes('r$')
+
+    // Pega linha inteira para verificação
+    const lineStart = norm.lastIndexOf('\n', matchIndex)
+    const lineEnd = norm.indexOf('\n', matchIndex)
+    const lineText = norm
+      .slice(lineStart === -1 ? 0 : lineStart, lineEnd === -1 ? norm.length : lineEnd)
+      .trim()
+
+    // Filtra casos óbvios que não são valor total:
+    // ex: "desconto 10,00", "troco 5,00", "icms 1,20", "tributos 4,50"
+    const lowerLine = normalizeOcrText(lineText)
+    if (
+      lowerLine.includes('troco') ||
+      lowerLine.includes('desconto') ||
+      lowerLine.includes('tributo') ||
+      lowerLine.includes('aliq') ||
+      lowerLine.includes('icms')
+    ) {
+      // Ignora se for claramente desconto ou troco e não tiver "total"
+      if (!nearTotal) {
+        continue
+      }
+    }
+
+    candidates.push({
+      value: Number(numericValue.toFixed(2)),
+      rawString: fullMatch,
+      index: matchIndex,
+      isTail30: matchIndex >= tail30Threshold,
+      nearTotalKeyword: nearTotal,
+      nearPaidKeyword: nearPaid,
+      nearCurrencySymbol: nearCurrency,
+      lineText,
+    })
+  }
+
+  if (candidates.length === 0) return null
+
+  // 1. Candidatos explícitos acompanhados de keyword TOTAL ou PAGO
+  const totalKeywordCandidates = candidates.filter((c) => c.nearTotalKeyword || c.nearPaidKeyword)
+  if (totalKeywordCandidates.length > 0) {
+    // Entre os associados a "Total", dá preferência para os que estão na segunda metade/final
+    const tailTotals = totalKeywordCandidates.filter((c) => c.isTail30)
+    if (tailTotals.length > 0) {
+      // Pega o maior valor do final associado a Total
+      const maxTailTotal = Math.max(...tailTotals.map((c) => c.value))
+      return maxTailTotal
+    }
+    // Caso contrário, pega o maior valor associado a Total em qualquer posição
+    return Math.max(...totalKeywordCandidates.map((c) => c.value))
+  }
+
+  // 2. Regra dos 30% finais: o valor Total costuma ficar impresso no final do recibo térmico
+  const tailCandidates = candidates.filter((c) => c.isTail30)
+  if (tailCandidates.length > 0) {
+    // Maior valor encontrado nos 30% finais
+    const maxTail = Math.max(...tailCandidates.map((c) => c.value))
+
+    // Se o recibo for Uber / Táxi e tiver valor absurdamente destoante (ex: 3500 por erro de OCR), ajusta
+    if (categoryHint === 'uber_taxi' && maxTail > 500) {
+      const smaller = tailCandidates.filter((c) => c.value <= 500)
+      if (smaller.length > 0) {
+        return Math.max(...smaller.map((c) => c.value))
+      }
+    }
+
+    return maxTail
+  }
+
+  // 3. Fallback: maior valor absoluto do documento (limitado ao teto de R$ 15.000)
+  let maxAbsolute = Math.max(...candidates.map((c) => c.value))
+
+  // Contexto de Uber: viagens corporativas raramente passam de R$ 500
+  if (categoryHint === 'uber_taxi' && maxAbsolute > 500) {
+    const reasonableUber = candidates.filter((c) => c.value <= 500)
+    if (reasonableUber.length > 0) {
+      maxAbsolute = Math.max(...reasonableUber.map((c) => c.value))
+    }
+  }
+
+  return maxAbsolute
+}
+
+// =============================================================================
+// 4. PARSER ESTRUTURADO DE COMPROVANTES BRASILEIROS (parseBrazilianReceiptText)
+// =============================================================================
+
+const KNOWN_MERCHANT_SIGNATURES: Array<{
+  match: string
+  name: string
+  category?: ExpenseCategory
+}> = [
+  // Locadoras de Veículos (Transporte)
+  { match: 'unidas', name: 'Unidas Locadora', category: 'transporte' },
+  { match: 'localiza', name: 'Localiza Rent a Car', category: 'transporte' },
+  { match: 'movida', name: 'Movida Aluguel de Carros', category: 'transporte' },
+  { match: 'hertz', name: 'Hertz Rent a Car', category: 'transporte' },
+  { match: 'rent a car', name: 'Locadora de Veículos', category: 'transporte' },
+  // Cias Aéreas
+  { match: 'latam', name: 'LATAM Airlines', category: 'transporte' },
+  { match: 'gol linhas', name: 'Gol Linhas Aéreas', category: 'transporte' },
+  { match: 'azul linhas', name: 'Azul Linhas Aéreas', category: 'transporte' },
+  { match: 'passaredo', name: 'Voepass Linhas Aéreas', category: 'transporte' },
+  // Mobilidade Urbana
+  { match: 'uber', name: 'Uber do Brasil', category: 'uber_taxi' },
+  { match: '99app', name: '99 App', category: 'uber_taxi' },
+  { match: '99 tecnologia', name: '99 App', category: 'uber_taxi' },
+  { match: '99pop', name: '99 App', category: 'uber_taxi' },
+  // Postos de Combustível
+  { match: 'ipiranga', name: 'Posto Ipiranga', category: 'combustivel' },
+  { match: 'petrobras', name: 'Posto Petrobras', category: 'combustivel' },
+  { match: 'raizen', name: 'Posto Shell (Raízen)', category: 'combustivel' },
+  // Alimentação & Restaurantes
+  { match: 'meu sushi', name: 'Meu Sushi Temakeria', category: 'alimentacao' },
+  { match: 'rodosnack', name: 'Rodosnack Estiva Lanchonete', category: 'alimentacao' },
+  { match: 'fogo de chao', name: 'Fogo de Chão', category: 'alimentacao' },
+  { match: 'fogo de chão', name: 'Fogo de Chão', category: 'alimentacao' },
+  { match: 'mcdonald', name: "McDonald's", category: 'alimentacao' },
+  { match: 'burger king', name: 'Burger King', category: 'alimentacao' },
+  { match: 'starbucks', name: 'Starbucks', category: 'alimentacao' },
+  // Concessionárias / Pedágio
+  { match: 'autoban', name: 'Concessionária AutoBAn', category: 'pedagio' },
+  { match: 'ecovias', name: 'Ecovias dos Imigrantes', category: 'pedagio' },
+  { match: 'arteris', name: 'Arteris Concessionária', category: 'pedagio' },
+  { match: 'sem parar', name: 'Sem Parar', category: 'pedagio' },
+  { match: 'conectcar', name: 'ConectCar', category: 'pedagio' },
+  // Hospedagem
+  { match: 'hotel ibis', name: 'Hotel Ibis', category: 'hospedagem' },
+  { match: 'ibis', name: 'Hotel Ibis', category: 'hospedagem' },
+  { match: 'mercure', name: 'Hotel Mercure', category: 'hospedagem' },
+  { match: 'novotel', name: 'Hotel Novotel', category: 'hospedagem' },
+  // Estacionamento
+  { match: 'estapar', name: 'Estapar Estacionamentos', category: 'estacionamento' },
+]
+
+/**
+ * Structured Brazilian receipt parser: extrai CNPJ, datas, horário, valor inteligente e categoria
+ * via regras NLP leves e dicionários ponderados.
+ */
+export function parseBrazilianReceiptText(rawText: string): ParsedReceiptFields {
+  const normalizedText = (rawText || '').replace(/\r/g, ' ')
+  const lowerText = normalizeOcrText(normalizedText)
+
+  // 1. CNPJ: 00.000.000/0000-00 ou 14 dígitos diretos
+  let cnpj: string | null = null
+  const cnpjMatch = normalizedText.match(/\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b/)
+  if (cnpjMatch) {
+    const rawDigits = cnpjMatch[0].replace(/\D/g, '')
+    if (rawDigits.length === 14) {
+      cnpj = `${rawDigits.slice(0, 2)}.${rawDigits.slice(2, 5)}.${rawDigits.slice(5, 8)}/${rawDigits.slice(8, 12)}-${rawDigits.slice(12, 14)}`
+    }
+  }
+
+  // 2. Data de Emissão: dd/mm/aaaa ou dd-mm-aaaa ou aaaa-mm-dd
+  let issue_date: string | null = null
+  const dateRegex = /\b(0[1-9]|[12][0-9]|3[01])[/.-](0[1-9]|1[012])[/.-](20\d\d|\d{2})\b/g
+  const dateMatches = [...normalizedText.matchAll(dateRegex)]
+
+  if (dateMatches.length > 0) {
+    let bestDate: string | null = null
+    for (const match of dateMatches) {
+      const day = match[1]
+      const month = match[2]
+      let year = match[3]
+      if (year.length === 2) {
+        year = `20${year}`
+      }
+      const yNum = parseInt(year, 10)
+      if (yNum >= 2020 && yNum <= 2030) {
+        bestDate = `${year}-${month}-${day}`
+        // Prioriza datas próximas de palavras-chave fiscais
+        const idx = match.index ?? 0
+        const surrounding = normalizedText
+          .substring(Math.max(0, idx - 30), Math.min(normalizedText.length, idx + 40))
+          .toLowerCase()
+
+        if (
+          surrounding.includes('emiss') ||
+          surrounding.includes('data') ||
+          surrounding.includes('nfc') ||
+          surrounding.includes('pedido') ||
+          surrounding.includes('cupom')
+        ) {
+          issue_date = bestDate
+          break
+        }
+      }
+    }
+    if (!issue_date && bestDate) {
+      issue_date = bestDate
+    }
+  }
+
+  // Fallback ISO format YYYY-MM-DD
+  if (!issue_date) {
+    const isoMatch = normalizedText.match(/\b(20\d\d)-(0[1-9]|1[012])-(0[1-9]|[12]\d|3[01])\b/)
+    if (isoMatch) {
+      issue_date = isoMatch[0]
+    }
+  }
+
+  // 3. Horário: HH:mm ou HH:mm:ss
+  let issue_time: string | null = null
+  const timeMatch = normalizedText.match(/\b([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?\b/)
+  if (timeMatch) {
+    issue_time = `${timeMatch[1].padStart(2, '0')}:${timeMatch[2]}`
+  }
+
+  // 4. Estabelecimento / Razão Social
+  let merchant_name: string | null = null
+
+  // A) Assinaturas conhecidas
+  for (const sig of KNOWN_MERCHANT_SIGNATURES) {
+    if (lowerText.includes(sig.match)) {
+      merchant_name = sig.name
+      break
+    }
+  }
+
+  // B) Se não bater com conhecidos, analisa as primeiras linhas do cupom
+  if (!merchant_name) {
+    const lines = rawText
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 3)
+
+    for (let i = 0; i < Math.min(lines.length, 6); i++) {
+      const line = lines[i]
+      const lineLow = normalizeOcrText(line)
+
+      // Pula cabeçalhos genéricos
+      if (
+        lineLow.includes('comprovante') ||
+        lineLow.includes('danfe') ||
+        lineLow.includes('documento auxiliar') ||
+        lineLow.includes('documento') ||
+        lineLow.includes('detalhes do pedido') ||
+        lineLow.includes('cnpj') ||
+        lineLow.includes('cupom fiscal') ||
+        lineLow.includes('extrato') ||
+        lineLow.length < 4
+      ) {
+        continue
+      }
+
+      // Linhas com sufixos empresariais ou vocabulário corporativo
+      if (
+        lineLow.includes('ltda') ||
+        lineLow.includes('s/a') ||
+        lineLow.includes('s.a.') ||
+        lineLow.includes('me') ||
+        lineLow.includes('epp') ||
+        lineLow.includes('restaurante') ||
+        lineLow.includes('posto') ||
+        lineLow.includes('hotel') ||
+        lineLow.includes('lanchonete') ||
+        lineLow.includes('temakeria') ||
+        lineLow.includes('panificadora') ||
+        lineLow.includes('locadora') ||
+        lineLow.includes('estacionamento') ||
+        lineLow.includes('auto posto') ||
+        lineLow.includes('cafe') ||
+        line.split(' ').length >= 2
+      ) {
+        // Limpa caracteres especiais espúrios no início ou fim
+        merchant_name = line
+          .replace(/^[^a-zA-Z0-9]+/, '')
+          .slice(0, 55)
+          .trim()
+        break
+      }
+    }
+  }
+
+  // 5. Categorização Semântica por Pontuação (Scoring System)
+  const classification = classifyExpenseCategoryByScoring(rawText, merchant_name)
+  let category = classification.category
+
+  // Se alguma assinatura de merchant conhecida definiu categoria explícita, respeita
+  if (merchant_name) {
+    const matchedSig = KNOWN_MERCHANT_SIGNATURES.find((s) => s.name === merchant_name)
+    if (matchedSig?.category) {
+      category = matchedSig.category
+    }
+  }
+
+  // 6. Caçador Inteligente de Valor Total (prioriza 30% finais e contexto da categoria)
+  const amount = extractIntelligentAmount(rawText, category)
+
+  return {
+    merchant_name,
+    cnpj,
+    category,
+    amount,
+    issue_date,
+    issue_time,
+  }
+}
+
+// =============================================================================
+// 5. PIPELINE PRINCIPAL DO OCR REAL (processRealReceiptOcr)
+// =============================================================================
+
+/**
+ * Extrai texto embutido de PDFs nativos e renderiza a 1ª página em canvas
  */
 async function extractFromPdf(
   file: File,
@@ -66,7 +905,7 @@ async function extractFromPdf(
   const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer })
   const pdf = await loadingTask.promise
 
-  const totalPages = Math.min(pdf.numPages, 3) // Read up to first 3 pages
+  const totalPages = Math.min(pdf.numPages, 3) // Lê até 3 páginas
   let allText = ''
   let firstPageCanvasDataUrl = ''
 
@@ -74,12 +913,12 @@ async function extractFromPdf(
     onProgress?.(25 + Math.round((i / totalPages) * 25), `Lendo página ${i} de ${pdf.numPages}...`)
     const page = await pdf.getPage(i)
 
-    // Extract text content
+    // Extrai texto nativo da camada do PDF
     const textContent = await page.getTextContent()
     const pageText = textContent.items.map((item: any) => ('str' in item ? item.str : '')).join(' ')
     allText += ' ' + pageText
 
-    // Render first page to canvas to produce thumbnail preview and enable raster OCR if needed
+    // Renderiza a primeira página no canvas para preview e OCR de fallback se escaneado
     if (i === 1) {
       const viewport = page.getViewport({ scale: 1.5 })
       const canvas = document.createElement('canvas')
@@ -108,284 +947,21 @@ async function extractFromPdf(
 }
 
 /**
- * Run Tesseract OCR on an image file or canvas data URL
+ * Executa Tesseract OCR em imagem pré-processada (canvas Grayscale + Alto Contraste)
  */
 async function runOcrOnImage(
-  imageSource: File | string,
+  imageSource: File | Blob | string,
   onProgress?: (progress: number, status: string) => void,
 ): Promise<string> {
   onProgress?.(30, 'Inicializando motor OCR Tesseract...')
   const worker = await getOcrWorker(onProgress)
-  onProgress?.(50, 'Processando imagem via OCR neural...')
+  onProgress?.(50, 'Processando imagem via OCR neural local...')
   const ret = await worker.recognize(imageSource)
-  return ret.data.text || ''
+  return ret.data?.text || ''
 }
 
 /**
- * Structured Brazilian receipt deterministic parser
- * NEVER invents data: returns null for any field not extracted with high confidence
- */
-export function parseBrazilianReceiptText(rawText: string): {
-  merchant_name: string | null
-  cnpj: string | null
-  category: ExpenseCategory
-  amount: number | null
-  issue_date: string | null
-  issue_time: string | null
-} {
-  const normalizedText = rawText.replace(/\r/g, ' ')
-
-  // 1. CNPJ extraction: 00.000.000/0000-00 or 00000000000000
-  let cnpj: string | null = null
-  const cnpjMatch = normalizedText.match(/\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b/)
-  if (cnpjMatch) {
-    const rawCnpj = cnpjMatch[0].replace(/\D/g, '')
-    if (rawCnpj.length === 14) {
-      cnpj = `${rawCnpj.slice(0, 2)}.${rawCnpj.slice(2, 5)}.${rawCnpj.slice(5, 8)}/${rawCnpj.slice(8, 12)}-${rawCnpj.slice(12, 14)}`
-    }
-  }
-
-  // 2. Date extraction: dd/mm/yyyy or dd/mm/yy or yyyy-mm-dd
-  let issue_date: string | null = null
-  const dateRegex = /\b(0[1-9]|[12][0-9]|3[01])[/.-](0[1-9]|1[012])[/.-](20\d\d|\d{2})\b/g
-  const dateMatches = [...normalizedText.matchAll(dateRegex)]
-  if (dateMatches.length > 0) {
-    // Pick the most plausible receipt date (often accompanied by 'emissão', 'data', or near time)
-    let bestDate: string | null = null
-    for (const match of dateMatches) {
-      const day = match[1]
-      const month = match[2]
-      let year = match[3]
-      if (year.length === 2) {
-        year = `20${year}`
-      }
-      const yNum = parseInt(year, 10)
-      if (yNum >= 2020 && yNum <= 2030) {
-        bestDate = `${year}-${month}-${day}`
-        // Prioritize if near keywords
-        const index = match.index ?? 0
-        const surrounding = normalizedText
-          .substring(Math.max(0, index - 25), Math.min(normalizedText.length, index + 35))
-          .toLowerCase()
-        if (
-          surrounding.includes('emiss') ||
-          surrounding.includes('data') ||
-          surrounding.includes('nfc') ||
-          surrounding.includes('pedido')
-        ) {
-          issue_date = bestDate
-          break
-        }
-      }
-    }
-    if (!issue_date && bestDate) {
-      issue_date = bestDate
-    }
-  }
-
-  // Fallback ISO format YYYY-MM-DD
-  if (!issue_date) {
-    const isoMatch = normalizedText.match(/\b(20\d\d)-(0[1-9]|1[012])-(0[1-9]|[12]\d|3[01])\b/)
-    if (isoMatch) {
-      issue_date = isoMatch[0]
-    }
-  }
-
-  // 3. Time extraction: HH:mm or HH:mm:ss
-  let issue_time: string | null = null
-  const timeMatch = normalizedText.match(/\b([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?\b/)
-  if (timeMatch) {
-    issue_time = `${timeMatch[1].padStart(2, '0')}:${timeMatch[2]}`
-  }
-
-  // 4. Amount extraction: total / valor a pagar / total a pagar / r$ XX,XX
-  let amount: number | null = null
-  const totalKeywords = [
-    /(?:valor\s*total|total\s*a\s*pagar|total\s*r\$|total\s*liquido|v\.?\s*total|total|subtotal)[\s:=-]*r?\$?\s*([\d.\s]+,\d{2})/i,
-    /(?:pago\s*pelo\s*app|valor\s*pago|cartao|credito|debito)[\s:=-]*r?\$?\s*([\d.\s]+,\d{2})/i,
-    /r\$\s*([\d.\s]+,\d{2})/gi,
-  ]
-
-  // Try direct total keyword pattern first
-  for (const regex of totalKeywords.slice(0, 2)) {
-    const match = normalizedText.match(regex)
-    if (match && match[1]) {
-      const cleanVal = match[1].replace(/\s/g, '').replace(/\./g, '').replace(',', '.')
-      const num = parseFloat(cleanVal)
-      if (!isNaN(num) && num > 0 && num < 100000) {
-        amount = Number(num.toFixed(2))
-        break
-      }
-    }
-  }
-
-  // If not found with keyword, search all R$ occurrences and pick the largest one (usually the grand total)
-  if (!amount) {
-    const allR$Matches = [...normalizedText.matchAll(/r\$\s*([\d.\s]+,\d{2})/gi)]
-    const amountsFound: number[] = []
-    for (const m of allR$Matches) {
-      const cleanVal = m[1].replace(/\s/g, '').replace(/\./g, '').replace(',', '.')
-      const num = parseFloat(cleanVal)
-      if (!isNaN(num) && num > 0 && num < 100000) {
-        amountsFound.push(num)
-      }
-    }
-    if (amountsFound.length > 0) {
-      // Typically Total is the maximum value on receipt
-      amount = Number(Math.max(...amountsFound).toFixed(2))
-    }
-  }
-
-  // 5. Merchant extraction:
-  let merchant_name: string | null = null
-  const lines = rawText
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.length > 3)
-
-  // Known merchant signatures from text
-  const lower = normalizedText.toLowerCase()
-  if (lower.includes('meu sushi')) merchant_name = 'Meu Sushi Temakeria'
-  else if (lower.includes('rodosnack')) merchant_name = 'Rodosnack Estiva Lanchonete e Restaurante'
-  else if (lower.includes('autoban')) merchant_name = 'Concessionária AutoBAn'
-  else if (lower.includes('ipiranga')) merchant_name = 'Posto Ipiranga'
-  else if (lower.includes('uber')) merchant_name = 'Uber do Brasil'
-  else if (lower.includes('99app') || lower.includes('99 tecnologia')) merchant_name = '99 App'
-  else if (lower.includes('fogo de chao') || lower.includes('fogo de chão'))
-    merchant_name = 'Fogo de Chão'
-  else if (lower.includes('localiza')) merchant_name = 'Localiza Rent a Car'
-  else if (lower.includes('movida')) merchant_name = 'Movida Aluguel de Carros'
-  else if (lower.includes('latam')) merchant_name = 'LATAM Airlines'
-  else if (lower.includes('gol linhas')) merchant_name = 'Gol Linhas Aéreas'
-  else if (lower.includes('azul linhas')) merchant_name = 'Azul Linhas Aéreas'
-  else if (lower.includes('hotel ibis') || lower.includes('ibis')) merchant_name = 'Hotel Ibis'
-  else {
-    // Look at first 5 lines for company name (skip headers like CNPJ, DANFE, etc.)
-    for (let i = 0; i < Math.min(lines.length, 6); i++) {
-      const line = lines[i]
-      const lineLow = line.toLowerCase()
-      if (
-        lineLow.includes('comprovante') ||
-        lineLow.includes('danfe') ||
-        lineLow.includes('documento') ||
-        lineLow.includes('detalhes do pedido') ||
-        lineLow.includes('cnpj') ||
-        lineLow.includes('cupom') ||
-        lineLow.length < 4
-      ) {
-        continue
-      }
-      // If line has LTDA, S/A, ME, EPP, RESTAURANTE, POSTO, HOTEL, LANCHONETE, or looks like a title
-      if (
-        lineLow.includes('ltda') ||
-        lineLow.includes('s/a') ||
-        lineLow.includes('s.a.') ||
-        lineLow.includes('me') ||
-        lineLow.includes('restaurante') ||
-        lineLow.includes('posto') ||
-        lineLow.includes('hotel') ||
-        lineLow.includes('lanchonete') ||
-        lineLow.includes('temakeria') ||
-        lineLow.includes('panificadora') ||
-        lineLow.includes('cafe') ||
-        lineLow.includes('café') ||
-        line.split(' ').length >= 2
-      ) {
-        merchant_name = line.slice(0, 50).trim()
-        break
-      }
-    }
-  }
-
-  // 6. Category classification based on verified keywords
-  let category: ExpenseCategory = 'outros'
-  if (
-    lower.includes('combustivel') ||
-    lower.includes('gasolina') ||
-    lower.includes('etanol') ||
-    lower.includes('diesel') ||
-    lower.includes('posto') ||
-    lower.includes('abastecimento')
-  ) {
-    category = 'combustivel'
-  } else if (
-    lower.includes('uber') ||
-    lower.includes('99') ||
-    lower.includes('taxi') ||
-    lower.includes('táxi') ||
-    lower.includes('corrida')
-  ) {
-    category = 'uber_taxi'
-  } else if (
-    lower.includes('restaurante') ||
-    lower.includes('lanchonete') ||
-    lower.includes('alimentacao') ||
-    lower.includes('alimentação') ||
-    lower.includes('sushi') ||
-    lower.includes('burger') ||
-    lower.includes('lanche') ||
-    lower.includes('salmão') ||
-    lower.includes('refeicao') ||
-    lower.includes('refeição') ||
-    lower.includes('almoco') ||
-    lower.includes('almoço') ||
-    lower.includes('jantar') ||
-    lower.includes('self servi') ||
-    lower.includes('padaria')
-  ) {
-    category = 'alimentacao'
-  } else if (
-    lower.includes('hotel') ||
-    lower.includes('pousada') ||
-    lower.includes('hospedagem') ||
-    lower.includes('diaria') ||
-    lower.includes('diária') ||
-    lower.includes('checkin') ||
-    lower.includes('reserva')
-  ) {
-    category = 'hospedagem'
-  } else if (
-    lower.includes('estacionamento') ||
-    lower.includes('rotativo') ||
-    lower.includes('garagem') ||
-    lower.includes('estapapar') ||
-    lower.includes('valet')
-  ) {
-    category = 'estacionamento'
-  } else if (
-    lower.includes('pedagio') ||
-    lower.includes('pedágio') ||
-    lower.includes('rodovia') ||
-    lower.includes('concessionaria') ||
-    lower.includes('concessionária') ||
-    lower.includes('sem parar') ||
-    lower.includes('conectcar')
-  ) {
-    category = 'pedagio'
-  } else if (
-    lower.includes('aereo') ||
-    lower.includes('aéreo') ||
-    lower.includes('voo') ||
-    lower.includes('passagem') ||
-    lower.includes('locadora') ||
-    lower.includes('aluguel de carro')
-  ) {
-    category = 'transporte'
-  }
-
-  return {
-    merchant_name,
-    cnpj,
-    category,
-    amount,
-    issue_date,
-    issue_time,
-  }
-}
-
-/**
- * Main real OCR pipeline function
- * Accepts PDF or Image file, runs real extraction, parses Brazilian fiscal fields deterministically.
+ * Pipeline principal do OCR Real com Pré-processamento e Busca Dinâmica
  */
 export async function processRealReceiptOcr(
   file: File,
@@ -398,8 +974,8 @@ export async function processRealReceiptOcr(
   let extractionMethod: 'pdf_text' | 'image_ocr' | 'pdf_raster_ocr' = 'pdf_text'
 
   if (isPdf) {
-    // 1. Try PDF text layer
-    onProgress?.(10, 'Analisando camada de texto do PDF...')
+    // 1. Tenta camada nativa do PDF
+    onProgress?.(10, 'Analisando camada de texto nativa do PDF...')
     const pdfResult = await extractFromPdf(file, onProgress)
     previewDataUrl = pdfResult.pageCanvasDataUrl
 
@@ -408,30 +984,45 @@ export async function processRealReceiptOcr(
       extractionMethod = 'pdf_text'
       onProgress?.(80, 'Camada de texto nativa extraída com sucesso.')
     } else {
-      // 2. Scanned PDF without text layer: rasterize and run Tesseract OCR
-      onProgress?.(40, 'PDF digitalizado (sem texto nativo). Aplicando OCR na imagem...')
+      // 2. PDF digitalizado / escaneado (sem texto vetorial): pré-processa canvas e roda Tesseract
+      onProgress?.(35, 'PDF digitalizado (sem camada de texto). Otimizando imagem...')
       extractionMethod = 'pdf_raster_ocr'
       if (pdfResult.pageCanvasDataUrl) {
-        rawText = await runOcrOnImage(pdfResult.pageCanvasDataUrl, onProgress)
+        // Pré-processamento com contraste reforçado
+        const preprocessed = await preprocessReceiptImage(pdfResult.pageCanvasDataUrl, {
+          contrast: 1.45,
+        })
+        rawText = await runOcrOnImage(preprocessed, onProgress)
       } else {
         rawText = ''
       }
     }
   } else {
-    // Image file (JPG/PNG/WEBP)
+    // Imagem (JPG, PNG, WEBP, etc.)
     extractionMethod = 'image_ocr'
-    onProgress?.(15, 'Carregando imagem do comprovante...')
+    onProgress?.(15, 'Pré-processando imagem no canvas (Grayscale & Alto Contraste)...')
 
-    // Create local object URL for instant preview
+    // Gera preview instantâneo a partir do arquivo original
     previewDataUrl = URL.createObjectURL(file)
 
-    // Run Tesseract OCR
-    rawText = await runOcrOnImage(file, onProgress)
+    // Aplica Grayscale + Contraste no canvas invisível antes de enviar ao Tesseract
+    let processedImageDataUrl: string = previewDataUrl
+    try {
+      processedImageDataUrl = await preprocessReceiptImage(file, {
+        contrast: 1.45,
+      })
+    } catch (prepErr) {
+      console.warn('Falha no pré-processamento do canvas, usando original:', prepErr)
+      processedImageDataUrl = previewDataUrl
+    }
+
+    // Executa o Tesseract na imagem pré-processada
+    rawText = await runOcrOnImage(processedImageDataUrl, onProgress)
   }
 
-  onProgress?.(90, 'Estruturando campos fiscais (CNPJ, data, valor)...')
+  onProgress?.(90, 'Estruturando campos fiscais (CNPJ, data, valor inteligente)...')
 
-  // Parse structured data deterministically (NEVER fake)
+  // Parser robusto com pontuação semântica e caçador inteligente de valores
   const parsed = parseBrazilianReceiptText(rawText)
 
   const recognized_fields = {

@@ -199,6 +199,8 @@ export default function TripDetailPage() {
   // Edit Trip Modal
   const [editTripOpen, setEditTripOpen] = useState(false)
   const [editDestination, setEditDestination] = useState('')
+  const [editStartDate, setEditStartDate] = useState('')
+  const [editEndDate, setEditEndDate] = useState('')
   const [editMotivo, setEditMotivo] = useState('')
   const [editStatus, setEditStatus] = useState<TripStatus>('em_triagem')
 
@@ -253,6 +255,8 @@ export default function TripDetailPage() {
 
       // Pre-fill edit modal
       setEditDestination(t.destination)
+      setEditStartDate(t.start_date)
+      setEditEndDate(t.end_date)
       setEditMotivo(t.motivo)
       setEditStatus(t.status)
       setNewExpDate(t.start_date)
@@ -712,10 +716,14 @@ export default function TripDetailPage() {
 
   const handleSaveTripEdits = async () => {
     if (!trip) return
-    const isLockedCurrently = storageService.isTripLocked(trip.status)
 
-    // Se já está travada, só permite alterar o status (se for para um novo status)
-    // Destination e motivo são mantidos inalterados
+    // Regra de bloqueio de edição cadastral:
+    // Apenas viagens 'fechada' (com relatório já finalizado) ou 'reembolsada' (quitação definitiva),
+    // OU viagens que já tiveram relatório enviado (report_sent_at) têm os campos bloqueados.
+    // Viagens abertas (em_triagem / auditada sem envio) ou reabertas permitem editar destino e período.
+    const isEditingLocked =
+      trip.status === 'reembolsada' || trip.status === 'fechada' || Boolean(trip.report_sent_at)
+
     // Gatekeeping: impedir fechamento manual ou reembolso se houver comprovantes pendentes
     if ((editStatus === 'fechada' || editStatus === 'reembolsada') && hasPendingExpenses) {
       toast({
@@ -726,14 +734,48 @@ export default function TripDetailPage() {
       return
     }
 
-    // Se já está travada, só permite alterar o status (se for para um novo status)
-    // Destination e motivo são mantidos inalterados
-    const payload: { destination?: string; motivo?: string; status: TripStatus } = {
+    const payload: {
+      destination?: string
+      start_date?: string
+      end_date?: string
+      motivo?: string
+      status: TripStatus
+    } = {
       status: editStatus,
     }
 
-    if (!isLockedCurrently) {
-      payload.destination = editDestination.trim()
+    if (!isEditingLocked) {
+      const trimmedDest = editDestination.trim()
+      if (!trimmedDest) {
+        toast({
+          title: 'Destino obrigatório',
+          description: 'Por favor, informe o destino da viagem.',
+          variant: 'destructive',
+        })
+        return
+      }
+
+      if (!editStartDate || !editEndDate) {
+        toast({
+          title: 'Período obrigatório',
+          description: 'Informe as datas de início e término da viagem.',
+          variant: 'destructive',
+        })
+        return
+      }
+
+      if (editStartDate > editEndDate) {
+        toast({
+          title: 'Período inválido',
+          description: 'A data de início não pode ser posterior à data de término.',
+          variant: 'destructive',
+        })
+        return
+      }
+
+      payload.destination = trimmedDest
+      payload.start_date = editStartDate
+      payload.end_date = editEndDate
       payload.motivo = editMotivo.trim()
     }
 
@@ -741,7 +783,7 @@ export default function TripDetailPage() {
       await storageService.updateTrip(trip.id, payload)
       toast({
         title: 'Viagem atualizada',
-        description: 'Os dados cadastrais foram salvos com sucesso.',
+        description: 'Os dados cadastrais e o período foram salvos com sucesso.',
       })
       setEditTripOpen(false)
       loadTripData()
@@ -1142,7 +1184,9 @@ export default function TripDetailPage() {
             <div className="space-y-0.5">
               <h3 className="font-bold text-sm sm:text-base text-amber-950 flex items-center gap-2">
                 <span>
-                  🔒 Esta viagem está fechada/auditada e seus dados estão bloqueados para edição
+                  {effectiveStatus === 'auditada' && !trip.report_sent_at
+                    ? '🛡️ Viagem Auditada (Conferência Concluída)'
+                    : '🔒 Esta viagem está protegida por governança'}
                 </span>
               </h3>
               <p className="text-xs text-amber-800 leading-relaxed">
@@ -1150,9 +1194,22 @@ export default function TripDetailPage() {
                 <strong className="underline decoration-amber-400 underline-offset-2">
                   {statusConf.label}
                 </strong>
-                . Despesas não podem ser inseridas, alteradas ou excluídas, e os dados principais da
-                viagem estão protegidos por governança. Exportação e envio de relatório continuam
-                disponíveis.
+                {effectiveStatus === 'auditada' && !trip.report_sent_at ? (
+                  <span>
+                    . Todos os comprovantes estão conferidos. O lançamento de novas despesas está
+                    travado, mas a{' '}
+                    <strong>
+                      correção do período (datas) e destino da viagem continua liberada
+                    </strong>{' '}
+                    em &quot;Editar Viagem&quot; antes do envio do relatório.
+                  </span>
+                ) : (
+                  <span>
+                    . Despesas e dados cadastrais estão bloqueados contra modificação direta.
+                    Exportação de relatório continua disponível. Para ajustes, solicite a reabertura
+                    por um administrador.
+                  </span>
+                )}
               </p>
             </div>
           </div>
@@ -1256,12 +1313,16 @@ export default function TripDetailPage() {
             onClick={() => setEditTripOpen(true)}
             className="text-xs gap-1.5"
           >
-            {isTripLocked ? (
+            {trip.status === 'reembolsada' || trip.status === 'fechada' || trip.report_sent_at ? (
               <Lock className="w-3.5 h-3.5 text-slate-500" />
             ) : (
-              <Edit className="w-3.5 h-3.5" />
+              <Edit className="w-3.5 h-3.5 text-blue-600" />
             )}
-            <span>{isTripLocked ? 'Ver / Alterar Status' : 'Editar Viagem'}</span>
+            <span>
+              {trip.status === 'reembolsada' || trip.status === 'fechada' || trip.report_sent_at
+                ? 'Ver / Alterar Status'
+                : 'Editar Viagem'}
+            </span>
           </Button>
 
           {/* Exportação Direta de Relatório: PDF Consolidado e Planilha Excel */}
@@ -2270,126 +2331,220 @@ export default function TripDetailPage() {
       </Dialog>
 
       {/* Edit Trip Details Modal */}
-      <Dialog open={editTripOpen} onOpenChange={setEditTripOpen}>
-        <DialogContent className="sm:max-w-[480px]">
-          <DialogHeader>
-            <DialogTitle className="text-base font-bold text-slate-900 flex items-center gap-2">
-              {isTripLocked ? (
-                <Lock className="w-4 h-4 text-amber-600" />
-              ) : (
-                <Edit className="w-4 h-4 text-blue-600" />
-              )}
-              <span>
-                {isTripLocked
-                  ? 'Alterar Status da Viagem (Bloqueada para Edição)'
-                  : 'Editar Dados da Viagem'}
-              </span>
-            </DialogTitle>
-            <DialogDescription className="text-xs text-slate-500">
-              {isTripLocked
-                ? 'Esta viagem está em modo somente leitura devido ao seu status atual. Os campos cadastrais estão bloqueados para edição.'
-                : 'Atualize os dados cadastrais da viagem corporativa.'}
-            </DialogDescription>
-          </DialogHeader>
+      {(() => {
+        // Bloqueio estrito de edição: viagens fechadas (relatório despachado),
+        // quitadas (reembolsada) ou com report_sent_at preenchido.
+        // Viagens abertas (em_triagem e auditada sem relatório enviado) ou reabertas
+        // têm os campos de destino, data de início e término 100% liberados para edição.
+        const isEditingBlocked =
+          trip.status === 'reembolsada' || trip.status === 'fechada' || Boolean(trip.report_sent_at)
 
-          {isTripLocked && (
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-xs flex items-center gap-2">
-              <Lock className="w-4 h-4 text-amber-700 shrink-0" />
-              <span>
-                🔒 <strong>Modo Somente Leitura:</strong> Esta viagem está fechada/reembolsada e
-                seus dados estão bloqueados para edição. Apenas a transição de status é permitida.
-              </span>
-            </div>
-          )}
+        // Verificação informativa: despesas com issue_date fora do novo período selecionado
+        const outOfRangeExpenses =
+          !isEditingBlocked && editStartDate && editEndDate
+            ? expenses.filter(
+                (exp) =>
+                  exp.issue_date &&
+                  (exp.issue_date < editStartDate || exp.issue_date > editEndDate),
+              )
+            : []
 
-          <div className="space-y-3 pt-2">
-            <div className="space-y-1">
-              <Label className="text-xs font-semibold text-slate-700">Destino</Label>
-              <Input
-                value={editDestination}
-                onChange={(e) => setEditDestination(e.target.value)}
-                disabled={isTripLocked}
-                className="text-xs disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
-              />
-            </div>
+        return (
+          <Dialog open={editTripOpen} onOpenChange={setEditTripOpen}>
+            <DialogContent className="sm:max-w-[500px]">
+              <DialogHeader>
+                <DialogTitle className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  {isEditingBlocked ? (
+                    <Lock className="w-4 h-4 text-amber-600" />
+                  ) : (
+                    <Edit className="w-4 h-4 text-blue-600" />
+                  )}
+                  <span>
+                    {isEditingBlocked
+                      ? 'Alterar Status da Viagem (Bloqueada para Edição)'
+                      : 'Editar Dados da Viagem'}
+                  </span>
+                </DialogTitle>
+                <DialogDescription className="text-xs text-slate-500">
+                  {isEditingBlocked
+                    ? 'Esta viagem já foi enviada, fechada ou quitada. Os campos cadastrais estão bloqueados por governança.'
+                    : 'Atualize os dados cadastrais, destino e período (data de início e fim) da viagem corporativa.'}
+                </DialogDescription>
+              </DialogHeader>
 
-            <div className="space-y-1">
-              <Label className="text-xs font-semibold text-slate-700">Período da Viagem</Label>
-              <div className="grid grid-cols-2 gap-2">
-                <Input
-                  type="date"
-                  value={trip.start_date}
-                  disabled
-                  className="text-xs bg-slate-100 text-slate-500 cursor-not-allowed"
-                  title="Data de início (somente leitura)"
-                />
-                <Input
-                  type="date"
-                  value={trip.end_date}
-                  disabled
-                  className="text-xs bg-slate-100 text-slate-500 cursor-not-allowed"
-                  title="Data de término (somente leitura)"
-                />
+              {isEditingBlocked ? (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-xs flex items-center gap-2">
+                  <Lock className="w-4 h-4 text-amber-700 shrink-0" />
+                  <span>
+                    🔒 <strong>Modo Somente Leitura:</strong> Esta viagem está fechada/reembolsada
+                    ou já teve relatório enviado. Para corrigir dados cadastrais, solicite a
+                    reabertura por um administrador.
+                  </span>
+                </div>
+              ) : trip.status === 'auditada' ? (
+                <div className="p-2.5 bg-blue-50 border border-blue-200 rounded-lg text-blue-900 text-xs flex items-start gap-2">
+                  <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                  <span className="leading-snug">
+                    Esta viagem está auditada (100% conferida) e ainda não foi despachada por
+                    e-mail. A edição de datas e destino é permitida para correção de digitação.
+                  </span>
+                </div>
+              ) : null}
+
+              <div className="space-y-3 pt-2">
+                <div className="space-y-1">
+                  <Label className="text-xs font-semibold text-slate-700">Destino *</Label>
+                  <Input
+                    value={editDestination}
+                    onChange={(e) => setEditDestination(e.target.value)}
+                    disabled={isEditingBlocked}
+                    placeholder="Ex: Indaiatuba, São Paulo - SP..."
+                    className="text-xs disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs font-semibold text-slate-700">
+                      Período da Viagem *
+                    </Label>
+                    {!isEditingBlocked && (
+                      <span className="text-[11px] text-blue-600 font-medium">
+                        Liberado para correção
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-0.5">
+                      <span className="text-[10px] text-slate-500 uppercase font-semibold">
+                        Data de Início
+                      </span>
+                      <Input
+                        type="date"
+                        value={editStartDate}
+                        onChange={(e) => setEditStartDate(e.target.value)}
+                        disabled={isEditingBlocked}
+                        className="text-xs disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
+                        title={
+                          isEditingBlocked
+                            ? 'Data de início (bloqueada)'
+                            : 'Corrigir data de início da viagem'
+                        }
+                      />
+                    </div>
+                    <div className="space-y-0.5">
+                      <span className="text-[10px] text-slate-500 uppercase font-semibold">
+                        Data de Término
+                      </span>
+                      <Input
+                        type="date"
+                        value={editEndDate}
+                        onChange={(e) => setEditEndDate(e.target.value)}
+                        disabled={isEditingBlocked}
+                        className="text-xs disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
+                        title={
+                          isEditingBlocked
+                            ? 'Data de término (bloqueada)'
+                            : 'Corrigir data de término da viagem'
+                        }
+                      />
+                    </div>
+                  </div>
+                  {editStartDate && editEndDate && editStartDate > editEndDate && (
+                    <p className="text-[11px] text-rose-600 font-medium mt-1">
+                      ⚠️ A data de início não pode ser posterior à data de término.
+                    </p>
+                  )}
+                </div>
+
+                {/* Aviso informativo e não destrutivo se houver despesas fora do novo período */}
+                {outOfRangeExpenses.length > 0 && (
+                  <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-xs space-y-1 animate-fade-in">
+                    <div className="flex items-center gap-1.5 font-semibold text-amber-950">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                      <span>
+                        Aviso: {outOfRangeExpenses.length} comprovante(s) fora do novo período
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-amber-800 leading-snug">
+                      Nenhum dado ou comprovante será apagado. Apenas verifique se a data dos
+                      recibos está correta ou se pertencem a este trecho:{' '}
+                      <strong className="text-amber-950">
+                        {outOfRangeExpenses
+                          .slice(0, 3)
+                          .map((e) => `${e.merchant_name} (${formatDateBR(e.issue_date)})`)
+                          .join(', ')}
+                        {outOfRangeExpenses.length > 3
+                          ? ` e mais ${outOfRangeExpenses.length - 3}...`
+                          : ''}
+                      </strong>
+                      .
+                    </p>
+                  </div>
+                )}
+
+                <div className="space-y-1">
+                  <Label className="text-xs font-semibold text-slate-700">Tipo de Transporte</Label>
+                  <Input
+                    value={TRANSPORT_LABELS[trip.transport_type]}
+                    disabled
+                    className="text-xs bg-slate-100 text-slate-500 cursor-not-allowed"
+                    title="Tipo de transporte (somente leitura)"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <Label className="text-xs font-semibold text-slate-700">Status do Processo</Label>
+                  <Select
+                    value={editStatus}
+                    onValueChange={(val) => setEditStatus(val as TripStatus)}
+                  >
+                    <SelectTrigger className="text-xs">
+                      <SelectValue placeholder="Selecione o status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="em_triagem">Em Triagem</SelectItem>
+                      <SelectItem value="com_pendencias">Com Pendências</SelectItem>
+                      <SelectItem value="auditada">Auditada</SelectItem>
+                      <SelectItem value="fechada">Fechada</SelectItem>
+                      <SelectItem value="reembolsada">Reembolsada</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-1">
+                  <Label className="text-xs font-semibold text-slate-700">Motivo</Label>
+                  <Textarea
+                    rows={2}
+                    value={editMotivo}
+                    onChange={(e) => setEditMotivo(e.target.value)}
+                    disabled={isEditingBlocked}
+                    className="text-xs resize-none disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
+                  />
+                </div>
               </div>
-            </div>
 
-            <div className="space-y-1">
-              <Label className="text-xs font-semibold text-slate-700">Tipo de Transporte</Label>
-              <Input
-                value={TRANSPORT_LABELS[trip.transport_type]}
-                disabled
-                className="text-xs bg-slate-100 text-slate-500 cursor-not-allowed"
-                title="Tipo de transporte (somente leitura)"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <Label className="text-xs font-semibold text-slate-700">Status do Processo</Label>
-              <Select value={editStatus} onValueChange={(val) => setEditStatus(val as TripStatus)}>
-                <SelectTrigger className="text-xs">
-                  <SelectValue placeholder="Selecione o status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="em_triagem">Em Triagem</SelectItem>
-                  <SelectItem value="com_pendencias">Com Pendências</SelectItem>
-                  <SelectItem value="auditada">Auditada</SelectItem>
-                  <SelectItem value="fechada">Fechada</SelectItem>
-                  <SelectItem value="reembolsada">Reembolsada</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-1">
-              <Label className="text-xs font-semibold text-slate-700">Motivo</Label>
-              <Textarea
-                rows={2}
-                value={editMotivo}
-                onChange={(e) => setEditMotivo(e.target.value)}
-                disabled={isTripLocked}
-                className="text-xs resize-none disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
-              />
-            </div>
-          </div>
-
-          <DialogFooter className="pt-3 gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setEditTripOpen(false)}
-              className="text-xs"
-            >
-              Cancelar
-            </Button>
-            <Button
-              size="sm"
-              onClick={handleSaveTripEdits}
-              className="bg-[#1e40af] text-white text-xs"
-            >
-              Salvar Alterações
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+              <DialogFooter className="pt-3 gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEditTripOpen(false)}
+                  className="text-xs"
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleSaveTripEdits}
+                  className="bg-[#1e40af] text-white text-xs"
+                >
+                  Salvar Alterações
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )
+      })()}
 
       {/* Edit Single Expense Modal (quando viagem aberta) */}
       <Dialog open={!!editingExpense} onOpenChange={(open) => !open && setEditingExpense(null)}>

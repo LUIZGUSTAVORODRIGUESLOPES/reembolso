@@ -1,6 +1,6 @@
 {
   "_versions": {
-    "send-report-email": 47,
-    "check-unsent-trip-reminders": 18
+    "send-report-email": 49,
+    "check-unsent-trip-reminders": 20
   }
 }

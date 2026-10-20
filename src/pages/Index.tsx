@@ -665,7 +665,7 @@ export default function Index() {
 
                         <td className="py-3.5 px-4 text-right" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1.5">
-                            {storageService.isTripLocked(effectiveStatus) ? (
+                            {storageService.isTripLocked(trip) ? (
                               <div
                                 className="h-8 w-8 flex items-center justify-center text-slate-300 cursor-not-allowed"
                                 title="Viagem fechada/auditada/reembolsada — exclusão bloqueada por governança"
@@ -750,7 +750,7 @@ export default function Index() {
                     </div>
 
                     <div className="flex items-center gap-2 pt-2">
-                      {storageService.isTripLocked(effectiveStatus) ? (
+                      {storageService.isTripLocked(trip) ? (
                         <div
                           className="flex items-center justify-center gap-1 text-[11px] text-slate-400 py-1.5 px-2 bg-slate-100 rounded border border-slate-200 cursor-not-allowed flex-1"
                           title="Viagem fechada/auditada/reembolsada — exclusão bloqueada por governança"

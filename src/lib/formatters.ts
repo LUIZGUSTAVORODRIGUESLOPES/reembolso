@@ -152,12 +152,8 @@ export function getEffectiveTripStatus(
   if (!trip || !trip.status) return 'em_triagem'
   const currentStatus = trip.status as TripStatus
 
-  // Se a viagem foi reaberta e seu status atual é 'em_triagem', ela está ativamente
-  // desbloqueada para ajustes e inclusão de recibos — NÃO deve ser sobreposta para 'fechada'
   const isReopened =
-    currentStatus === 'em_triagem' &&
-    Boolean(trip.reopened_at) &&
-    (!trip.report_sent_at || trip.reopened_at >= trip.report_sent_at)
+    Boolean(trip.reopened_at) && (!trip.report_sent_at || trip.reopened_at >= trip.report_sent_at)
 
   if (
     Boolean(trip.report_sent_at) &&

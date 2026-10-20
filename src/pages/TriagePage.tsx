@@ -300,9 +300,7 @@ export default function TriagePage() {
 
   // Check if current assigned trip is locked
   const assignedTrip = trips.find((t) => t.id === assignedTripId)
-  const isAssignedTripLocked = assignedTrip
-    ? storageService.isTripLocked(assignedTrip.status)
-    : false
+  const isAssignedTripLocked = assignedTrip ? storageService.isTripLocked(assignedTrip) : false
 
   const handleDeleteExpense = async () => {
     if (!currentExpense) return

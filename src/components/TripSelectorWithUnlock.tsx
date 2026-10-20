@@ -77,7 +77,7 @@ export function TripSelectorWithUnlock({
                 <span className="truncate text-slate-800">
                   {selectedTrip.destination} ({formatDateBR(selectedTrip.start_date)})
                 </span>
-                {storageService.isTripLocked(selectedTrip.status) && (
+                {storageService.isTripLocked(selectedTrip) && (
                   <Lock className="w-3 h-3 text-amber-600 shrink-0" />
                 )}
               </>
@@ -128,7 +128,7 @@ export function TripSelectorWithUnlock({
             </div>
           ) : (
             filteredTrips.map((tr) => {
-              const isLocked = storageService.isTripLocked(tr.status)
+              const isLocked = storageService.isTripLocked(tr)
               const isReembolsada = tr.status === 'reembolsada'
               const canUnlock = isLocked && !isReembolsada && isAdmin
               const isSelected = value === tr.id

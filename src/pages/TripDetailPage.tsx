@@ -480,7 +480,7 @@ export default function TripDetailPage() {
 
   const handleIgnoreRule = async (rule: AuditEvaluationRule) => {
     if (!trip) return
-    if (storageService.isTripLocked(trip.status)) {
+    if (storageService.isTripLocked(trip)) {
       toast({
         title: 'Ação não permitida',
         description:
@@ -3057,7 +3057,7 @@ export default function TripDetailPage() {
                 <SelectContent>
                   {/* Se a lista de userTrips ainda não tem a própria viagem atual, garante que ela apareça */}
                   {(userTrips.length > 0 ? userTrips : [trip]).map((tr) => {
-                    const locked = storageService.isTripLocked(tr.status)
+                    const locked = storageService.isTripLocked(tr)
                     const isCurrent = tr.id === trip.id
                     return (
                       <SelectItem

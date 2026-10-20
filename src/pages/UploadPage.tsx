@@ -215,7 +215,7 @@ export default function UploadPage() {
 
   const findBestTripForDate = (dateStr: string | null, trips: Trip[]): string => {
     // Filtrar apenas viagens abertas (em_triagem ou com_pendencias)
-    const openTrips = trips.filter((t) => !storageService.isTripLocked(t.status))
+    const openTrips = trips.filter((t) => !storageService.isTripLocked(t))
 
     if (!dateStr) {
       const triage = openTrips.find((t) => t.status === 'em_triagem')

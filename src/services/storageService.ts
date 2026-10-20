@@ -392,15 +392,29 @@ class SupabaseStorageService {
     if (typeof tripOrStatus === 'object') {
       const st = tripOrStatus.status
       if (!st) return false
-      // Se for reembolsada ou fechada, é bloqueada
-      if (st === 'reembolsada' || st === 'fechada') return true
-      if (st === 'auditada') {
-        const isReopened =
-          Boolean(tripOrStatus.reopened_at) &&
-          (!tripOrStatus.report_sent_at ||
-            (tripOrStatus.reopened_at ?? '') >= (tripOrStatus.report_sent_at ?? ''))
-        return !isReopened
+      // Viagens reembolsadas permanecem permanentemente imutáveis
+      if (st === 'reembolsada') return true
+
+      const isReopened =
+        Boolean(tripOrStatus.reopened_at) &&
+        (!tripOrStatus.report_sent_at ||
+          (tripOrStatus.reopened_at ?? '') >= (tripOrStatus.report_sent_at ?? ''))
+
+      // Se foi reaberta e o envio do relatório não é posterior à reabertura, a viagem está desbloqueada
+      if (isReopened) {
+        return false
       }
+
+      // Se relatório já foi enviado e não houve reabertura, a viagem está bloqueada
+      if (tripOrStatus.report_sent_at) {
+        return true
+      }
+
+      // Status fechada ou auditada sem reabertura também estão bloqueadas
+      if (st === 'fechada' || st === 'auditada') {
+        return true
+      }
+
       return false
     }
     const status = tripOrStatus
@@ -410,8 +424,18 @@ class SupabaseStorageService {
   /**
    * Mantido por retrocompatibilidade: alias para isTripLocked.
    */
-  public isTripLockedForDeletion(status: TripStatus | string): boolean {
-    return this.isTripLocked(status)
+  public isTripLockedForDeletion(
+    tripOrStatus:
+      | Trip
+      | {
+          status?: TripStatus | string | null
+          reopened_at?: string | null
+          report_sent_at?: string | null
+        }
+      | TripStatus
+      | string,
+  ): boolean {
+    return this.isTripLocked(tripOrStatus)
   }
 
   /**
@@ -487,7 +511,7 @@ class SupabaseStorageService {
 
     if (current.trip_id) {
       const trip = await this.getTrip(current.trip_id)
-      if (trip && this.isTripLockedForDeletion(trip.status)) {
+      if (trip && this.isTripLockedForDeletion(trip)) {
         throw new Error('Não é possível excluir despesa de uma viagem já fechada ou reembolsada.')
       }
     }
@@ -526,7 +550,7 @@ class SupabaseStorageService {
   public async restoreExpense(expenseData: Expense): Promise<Expense> {
     if (expenseData.trip_id) {
       const trip = await this.getTrip(expenseData.trip_id)
-      if (trip && this.isTripLocked(trip.status)) {
+      if (trip && this.isTripLocked(trip)) {
         throw new Error(
           `A viagem de destino "${trip.destination}" está bloqueada (${trip.status}). Não é possível restaurar a despesa.`,
         )
@@ -586,7 +610,7 @@ class SupabaseStorageService {
     const trip = await this.getTrip(id)
     if (!trip) return true
 
-    if (this.isTripLockedForDeletion(trip.status)) {
+    if (this.isTripLockedForDeletion(trip)) {
       throw new Error('Não é permitido excluir uma viagem já fechada ou reembolsada.')
     }
 
@@ -1334,12 +1358,14 @@ class SupabaseStorageService {
       }
     }
 
-    // Camada 3 de defesa: se report_sent_at estiver preenchido e status for 'em_triagem' ou 'com_pendencias',
-    // mapeia como 'fechada' em memória.
+    const isReopened =
+      Boolean(row.reopened_at) && (!row.report_sent_at || row.reopened_at >= row.report_sent_at)
+
     let effectiveStatus = row.status
     if (
       Boolean(row.report_sent_at) &&
-      (effectiveStatus === 'em_triagem' || effectiveStatus === 'com_pendencias')
+      (effectiveStatus === 'em_triagem' || effectiveStatus === 'com_pendencias') &&
+      !isReopened
     ) {
       effectiveStatus = 'fechada'
     }

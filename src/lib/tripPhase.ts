@@ -29,12 +29,8 @@ export function getEffectiveTripStatus(
 
   const currentStatus = trip.status as TripStatus
 
-  // Se a viagem foi reaberta e seu status atual é 'em_triagem', ela está ativamente
-  // desbloqueada para ajustes e inclusão de recibos — NÃO deve ser sobreposta para 'fechada'
   const isReopened =
-    currentStatus === 'em_triagem' &&
-    Boolean(trip.reopened_at) &&
-    (!trip.report_sent_at || trip.reopened_at >= trip.report_sent_at)
+    Boolean(trip.reopened_at) && (!trip.report_sent_at || trip.reopened_at >= trip.report_sent_at)
 
   // Se já foi enviado relatório e está em triagem ou com pendências, promove defensivamente para fechada
   if (
@@ -51,6 +47,7 @@ export function getEffectiveTripStatus(
 export interface TripPhaseInput {
   status: Trip['status']
   report_sent_at?: Trip['report_sent_at']
+  reopened_at?: Trip['reopened_at']
   expenses?: Array<{
     is_verified?: boolean | null
     audit_status?: string | null
@@ -111,11 +108,15 @@ export function getTripPhase(trip: TripPhaseInput): 'em_aberto' | 'empacotadas' 
   }
 
   // Viagens empacotadas / enviadas:
-  // Relatório despachado por e-mail (report_sent_at preenchido)
+  // Relatório despachado por e-mail (report_sent_at preenchido) sem reabertura ativa posterior
   // OU status 'auditada' (100% conferida, pronta para envio/quitação)
   // OU status 'fechada' (processo concluído aguardando quitação)
+  const isReopened =
+    Boolean(trip.reopened_at) &&
+    (!trip.report_sent_at || (trip.reopened_at ?? '') >= (trip.report_sent_at ?? ''))
+
   if (
-    Boolean(trip.report_sent_at) ||
+    (Boolean(trip.report_sent_at) && !isReopened) ||
     effectiveStatus === 'auditada' ||
     effectiveStatus === 'fechada'
   ) {

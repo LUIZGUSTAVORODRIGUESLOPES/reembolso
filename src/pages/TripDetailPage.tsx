@@ -94,6 +94,8 @@ import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/hooks/use-toast'
+import { Switch } from '@/components/ui/switch'
+import { parseBrazilianReceiptText } from '@/services/ocrService'
 import { showExpenseDeletedUndoToast, showTripDeletedUndoToast } from '@/services/undoService'
 import { useAuth } from '@/hooks/use-auth'
 import { SettleTripModal } from '@/components/SettleTripModal'
@@ -128,6 +130,12 @@ export default function TripDetailPage() {
   const [isUploadingExpense, setIsUploadingExpense] = useState(false)
   const [isDragOverReceipt, setIsDragOverReceipt] = useState(false)
   const fileInputManualRef = React.useRef<HTMLInputElement | null>(null)
+
+  // Hybrid points / miles for Add Expense modal
+  const [newExpUseMiles, setNewExpUseMiles] = useState(false)
+  const [newExpCashStr, setNewExpCashStr] = useState('')
+  const [newExpPointsStr, setNewExpPointsStr] = useState('')
+  const [newExpMileRateStr, setNewExpMileRateStr] = useState('0.017')
 
   const ALLOWED_MIME_TYPES = [
     'application/pdf',
@@ -222,6 +230,12 @@ export default function TripDetailPage() {
   const [editExpTripId, setEditExpTripId] = useState<string>('')
   const [userTrips, setUserTrips] = useState<Trip[]>([])
   const [loadingUserTrips, setLoadingUserTrips] = useState(false)
+
+  // Hybrid points / miles for Edit Expense modal
+  const [editExpUseMiles, setEditExpUseMiles] = useState(false)
+  const [editExpCashStr, setEditExpCashStr] = useState('')
+  const [editExpPointsStr, setEditExpPointsStr] = useState('')
+  const [editExpMileRateStr, setEditExpMileRateStr] = useState('0.017')
 
   const loadTripData = async () => {
     if (!id) return
@@ -571,6 +585,27 @@ export default function TripDetailPage() {
     setEditExpCategory(exp.category)
     setEditExpCnpj(exp.cnpj || '')
     setEditExpTripId(exp.trip_id || trip?.id || '')
+
+    // Verificar se há pontos no ocr_raw_text
+    const parsed =
+      exp.ocr_raw_text &&
+      exp.ocr_raw_text !== 'Arquivo sem texto extraído' &&
+      exp.ocr_raw_text !== 'Nenhum texto legível detectado.'
+        ? parseBrazilianReceiptText(exp.ocr_raw_text)
+        : null
+    const pts = parsed?.points_applied || 0
+    if (pts > 0 && exp.category === 'transporte') {
+      setEditExpUseMiles(true)
+      setEditExpPointsStr(String(pts))
+      setEditExpCashStr(String(parsed?.amount || exp.amount))
+      setEditExpMileRateStr('0.017')
+    } else {
+      setEditExpUseMiles(false)
+      setEditExpPointsStr('')
+      setEditExpCashStr(String(exp.amount))
+      setEditExpMileRateStr('0.017')
+    }
+
     loadAvailableTrips()
   }
 
@@ -2295,6 +2330,135 @@ export default function TripDetailPage() {
                 </Select>
               </div>
 
+              {/* Seção Condicional Híbrida: Passagens / Transporte pagos com Milhas/Pontos + Dinheiro */}
+              {newExpCategory === 'transporte' && (
+                <div className="p-3 rounded-xl border border-purple-200 bg-purple-50/50 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label
+                        htmlFor="new-exp-use-miles"
+                        className="text-xs font-bold text-purple-950 flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+                        Usar Pontos/Milhas
+                      </Label>
+                      <p className="text-[11px] text-purple-700">
+                        Passagem aérea paga com milhas + taxa/dinheiro
+                      </p>
+                    </div>
+                    <Switch
+                      id="new-exp-use-miles"
+                      checked={newExpUseMiles || parseFloat(newExpPointsStr) > 0}
+                      onCheckedChange={(checked) => {
+                        setNewExpUseMiles(checked)
+                        if (!checked) {
+                          setNewExpPointsStr('')
+                        } else if (!newExpCashStr) {
+                          setNewExpCashStr(newExpAmount)
+                        }
+                      }}
+                    />
+                  </div>
+
+                  {(newExpUseMiles || parseFloat(newExpPointsStr) > 0) && (
+                    <div className="space-y-2.5 pt-1">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <div className="space-y-1">
+                          <Label className="text-[10px] font-semibold text-slate-700">
+                            Valor em Dinheiro / Taxas (R$)
+                          </Label>
+                          <div className="relative">
+                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
+                              R$
+                            </span>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={newExpCashStr}
+                              onChange={(e) => setNewExpCashStr(e.target.value)}
+                              placeholder="0.00"
+                              className="pl-8 text-xs font-semibold tabular-nums bg-white"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-1">
+                          <Label className="text-[10px] font-semibold text-slate-700">
+                            Pontos Utilizados
+                          </Label>
+                          <Input
+                            type="number"
+                            step="1"
+                            min="0"
+                            value={newExpPointsStr}
+                            onChange={(e) => setNewExpPointsStr(e.target.value)}
+                            placeholder="Ex: 48100"
+                            className="text-xs font-semibold tabular-nums bg-white"
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <Label className="text-[10px] font-semibold text-slate-700">
+                            Valor da Milha (R$)
+                          </Label>
+                          <div className="relative">
+                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
+                              R$
+                            </span>
+                            <Input
+                              type="number"
+                              step="0.001"
+                              min="0"
+                              value={newExpMileRateStr}
+                              onChange={(e) => setNewExpMileRateStr(e.target.value)}
+                              placeholder="0.017"
+                              className="pl-8 text-xs font-semibold tabular-nums bg-white"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      {(() => {
+                        const parsedCash = parseFloat(newExpCashStr.replace(',', '.')) || 0
+                        const parsedPts = parseFloat(newExpPointsStr.replace(',', '.')) || 0
+                        const parsedRate = parseFloat(newExpMileRateStr.replace(',', '.')) || 0.017
+                        const suggested = parseFloat(
+                          (parsedCash + parsedPts * parsedRate).toFixed(2),
+                        )
+
+                        return (
+                          <div className="p-2.5 rounded-lg bg-white border border-purple-200 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-2">
+                            <div className="text-xs text-slate-700">
+                              <span className="font-medium">Valor Sugerido: </span>
+                              <strong className="text-purple-900 font-extrabold tabular-nums">
+                                {formatCurrencyBRL(suggested)}
+                              </strong>
+                              <span className="text-slate-600 ml-1">. Deseja aplicar?</span>
+                            </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              onClick={() => {
+                                setNewExpAmount(suggested.toFixed(2))
+                                toast({
+                                  title: 'Valor sugerido aplicado!',
+                                  description: `Valor total da despesa atualizado para ${formatCurrencyBRL(suggested)}.`,
+                                })
+                              }}
+                              className="bg-purple-700 hover:bg-purple-800 text-white text-xs h-7 px-3 gap-1 shrink-0 font-semibold"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                              <span>Aplicar</span>
+                            </Button>
+                          </div>
+                        )
+                      })()}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <DialogFooter className="pt-3 gap-2">
                 <Button
                   type="button"
@@ -2618,6 +2782,133 @@ export default function TripDetailPage() {
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Seção Condicional Híbrida: Passagens / Transporte pagos com Milhas/Pontos + Dinheiro na Edição */}
+            {editExpCategory === 'transporte' && (
+              <div className="p-3 rounded-xl border border-purple-200 bg-purple-50/50 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label
+                      htmlFor="edit-exp-use-miles"
+                      className="text-xs font-bold text-purple-950 flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+                      Usar Pontos/Milhas
+                    </Label>
+                    <p className="text-[11px] text-purple-700">
+                      Passagem aérea paga com milhas + taxa/dinheiro
+                    </p>
+                  </div>
+                  <Switch
+                    id="edit-exp-use-miles"
+                    checked={editExpUseMiles || parseFloat(editExpPointsStr) > 0}
+                    onCheckedChange={(checked) => {
+                      setEditExpUseMiles(checked)
+                      if (!checked) {
+                        setEditExpPointsStr('')
+                      } else if (!editExpCashStr) {
+                        setEditExpCashStr(editExpAmount)
+                      }
+                    }}
+                  />
+                </div>
+
+                {(editExpUseMiles || parseFloat(editExpPointsStr) > 0) && (
+                  <div className="space-y-2.5 pt-1">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <div className="space-y-1">
+                        <Label className="text-[10px] font-semibold text-slate-700">
+                          Valor em Dinheiro / Taxas (R$)
+                        </Label>
+                        <div className="relative">
+                          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
+                            R$
+                          </span>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={editExpCashStr}
+                            onChange={(e) => setEditExpCashStr(e.target.value)}
+                            placeholder="0.00"
+                            className="pl-8 text-xs font-semibold tabular-nums bg-white"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <Label className="text-[10px] font-semibold text-slate-700">
+                          Pontos Utilizados
+                        </Label>
+                        <Input
+                          type="number"
+                          step="1"
+                          min="0"
+                          value={editExpPointsStr}
+                          onChange={(e) => setEditExpPointsStr(e.target.value)}
+                          placeholder="Ex: 48100"
+                          className="text-xs font-semibold tabular-nums bg-white"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <Label className="text-[10px] font-semibold text-slate-700">
+                          Valor da Milha (R$)
+                        </Label>
+                        <div className="relative">
+                          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
+                            R$
+                          </span>
+                          <Input
+                            type="number"
+                            step="0.001"
+                            min="0"
+                            value={editExpMileRateStr}
+                            onChange={(e) => setEditExpMileRateStr(e.target.value)}
+                            placeholder="0.017"
+                            className="pl-8 text-xs font-semibold tabular-nums bg-white"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {(() => {
+                      const parsedCash = parseFloat(editExpCashStr.replace(',', '.')) || 0
+                      const parsedPts = parseFloat(editExpPointsStr.replace(',', '.')) || 0
+                      const parsedRate = parseFloat(editExpMileRateStr.replace(',', '.')) || 0.017
+                      const suggested = parseFloat((parsedCash + parsedPts * parsedRate).toFixed(2))
+
+                      return (
+                        <div className="p-2.5 rounded-lg bg-white border border-purple-200 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-2">
+                          <div className="text-xs text-slate-700">
+                            <span className="font-medium">Valor Sugerido: </span>
+                            <strong className="text-purple-900 font-extrabold tabular-nums">
+                              {formatCurrencyBRL(suggested)}
+                            </strong>
+                            <span className="text-slate-600 ml-1">. Deseja aplicar?</span>
+                          </div>
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={() => {
+                              setEditExpAmount(suggested.toFixed(2))
+                              toast({
+                                title: 'Valor sugerido aplicado!',
+                                description: `Valor total da despesa atualizado para ${formatCurrencyBRL(suggested)}.`,
+                              })
+                            }}
+                            className="bg-purple-700 hover:bg-purple-800 text-white text-xs h-7 px-3 gap-1 shrink-0 font-semibold"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Aplicar</span>
+                          </Button>
+                        </div>
+                      )
+                    })()}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="space-y-1">
               <Label className="text-xs font-semibold text-slate-700">CNPJ (opcional)</Label>

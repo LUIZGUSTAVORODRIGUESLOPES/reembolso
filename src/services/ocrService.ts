@@ -15,6 +15,7 @@ export interface ProcessedReceiptOcr {
   cnpj: string | null
   category: ExpenseCategory
   amount: number | null
+  points_applied?: number
   issue_date: string | null // YYYY-MM-DD
   issue_time: string | null // HH:mm
   ocr_raw_text: string
@@ -27,6 +28,7 @@ export interface ProcessedReceiptOcr {
     merchant_name: boolean
     cnpj: boolean
     issue_time: boolean
+    points_applied?: boolean
   }
 }
 
@@ -35,6 +37,7 @@ export interface ParsedReceiptFields {
   cnpj: string | null
   category: ExpenseCategory
   amount: number | null
+  points_applied?: number
   issue_date: string | null
   issue_time: string | null
 }
@@ -876,14 +879,44 @@ export function parseBrazilianReceiptText(rawText: string): ParsedReceiptFields 
     }
   }
 
-  // 6. Caçador Inteligente de Valor Total (prioriza 30% finais e contexto da categoria)
-  const amount = extractIntelligentAmount(rawText, category)
+  // 6. Caçador Inteligente de Pontos/Milhas (Cenário Híbrido)
+  // Busca padrões como: "48.100 pontos", "48,100 pontos", "48100 pts", etc.
+  let points_applied: number | undefined
+  const pointsRegex = /(?:(\d{1,3}(?:[.,]\d{3})+|\d+))\s*(?:pontos|milhas|pts)\b/i
+  const pointsMatch = normalizedText.match(pointsRegex)
+  if (pointsMatch) {
+    const rawDigits = pointsMatch[1].replace(/[.,]/g, '')
+    const parsedPts = parseInt(rawDigits, 10)
+    if (!isNaN(parsedPts) && parsedPts > 0) {
+      points_applied = parsedPts
+    }
+  }
+
+  // 7. Caçador Inteligente de Valor Total (prioriza 30% finais e contexto da categoria)
+  let amount = extractIntelligentAmount(rawText, category)
+
+  // No cenário híbrido, verificar se há valor financeiro (R$) associado junto aos pontos:
+  // ex: "Total da Passagem 48.100 pontos + R$ 248,45" ou "pontos + R$ ..."
+  if (points_applied) {
+    const hybridMoneyRegex =
+      /(?:pontos|milhas|pts)[\s+e/]+(?:r\$\s*)?(\d{1,3}(?:\.\d{3})*|\d+)[,.]([0-9]{2})/i
+    const hybridMatch = normalizedText.match(hybridMoneyRegex)
+    if (hybridMatch) {
+      const intPart = hybridMatch[1].replace(/\./g, '')
+      const decPart = hybridMatch[2]
+      const hybridAmount = parseFloat(`${intPart}.${decPart}`)
+      if (!isNaN(hybridAmount) && hybridAmount > 0) {
+        amount = Number(hybridAmount.toFixed(2))
+      }
+    }
+  }
 
   return {
     merchant_name,
     cnpj,
     category,
     amount,
+    points_applied,
     issue_date,
     issue_time,
   }
@@ -1031,6 +1064,7 @@ export async function processRealReceiptOcr(
     merchant_name: parsed.merchant_name !== null,
     cnpj: parsed.cnpj !== null,
     issue_time: parsed.issue_time !== null,
+    points_applied: parsed.points_applied !== undefined && parsed.points_applied > 0,
   }
 
   const recognizedCount = Object.values(recognized_fields).filter(Boolean).length
@@ -1045,6 +1079,7 @@ export async function processRealReceiptOcr(
     cnpj: parsed.cnpj,
     category: parsed.category,
     amount: parsed.amount,
+    points_applied: parsed.points_applied,
     issue_date: parsed.issue_date,
     issue_time: parsed.issue_time,
     ocr_raw_text: rawText.trim() || 'Nenhum texto legível detectado.',

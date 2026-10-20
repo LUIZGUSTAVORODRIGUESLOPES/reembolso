@@ -25,6 +25,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent } from '@/components/ui/card'
+import { Switch } from '@/components/ui/switch'
+import { Sparkles, Calculator, Check, Info } from 'lucide-react'
 import {
   Select,
   SelectContent,
@@ -71,6 +73,12 @@ export default function TriagePage() {
   const [category, setCategory] = useState<ExpenseCategory>('outros')
   const [amountStr, setAmountStr] = useState('')
   const [assignedTripId, setAssignedTripId] = useState<string>('')
+
+  // Hybrid points / miles state
+  const [useMiles, setUseMiles] = useState(false)
+  const [cashAmountStr, setCashAmountStr] = useState('')
+  const [pointsUsedStr, setPointsUsedStr] = useState('')
+  const [mileRateStr, setMileRateStr] = useState('0.017')
 
   // Dialogs
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
@@ -135,6 +143,10 @@ export default function TriagePage() {
       setCategory('outros')
       setAmountStr('')
       setAssignedTripId('')
+      setUseMiles(false)
+      setCashAmountStr('')
+      setPointsUsedStr('')
+      setMileRateStr('0.017')
       return
     }
 
@@ -190,6 +202,20 @@ export default function TriagePage() {
       initialAmount = String(parsedFallback.amount)
     }
     setAmountStr(initialAmount)
+
+    // Detecção híbrida de pontos/milhas
+    const detectedPoints = parsedFallback?.points_applied || 0
+    if (detectedPoints > 0) {
+      setUseMiles(initialCategory === 'transporte')
+      setPointsUsedStr(String(detectedPoints))
+      setCashAmountStr(initialAmount)
+      setMileRateStr('0.017')
+    } else {
+      setUseMiles(false)
+      setPointsUsedStr('')
+      setCashAmountStr(initialAmount)
+      setMileRateStr('0.017')
+    }
 
     // Assigned trip: preserve expense trip_id or select first available trip
     setAssignedTripId(currentExpense.trip_id || (trips[0]?.id ?? ''))
@@ -567,14 +593,153 @@ export default function TriagePage() {
                 </Select>
               </div>
 
-              {/* Valor (R$) */}
+              {/* Seção Condicional Híbrida: Passagens / Transporte pagos com Milhas/Pontos + Dinheiro */}
+              {category === 'transporte' && (
+                <div className="p-3.5 rounded-xl border border-purple-200 bg-purple-50/50 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label
+                        htmlFor="use-miles-switch"
+                        className="text-xs font-bold text-purple-950 flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+                        Usar Pontos/Milhas
+                      </Label>
+                      <p className="text-[11px] text-purple-700">
+                        Ative caso a passagem tenha sido paga combinando pontos e taxa/dinheiro
+                      </p>
+                    </div>
+                    <Switch
+                      id="use-miles-switch"
+                      checked={useMiles || parseFloat(pointsUsedStr) > 0}
+                      onCheckedChange={(checked) => {
+                        setUseMiles(checked)
+                        if (!checked) {
+                          setPointsUsedStr('')
+                        } else if (!cashAmountStr) {
+                          setCashAmountStr(amountStr)
+                        }
+                      }}
+                    />
+                  </div>
+
+                  {(useMiles || parseFloat(pointsUsedStr) > 0) && (
+                    <div className="space-y-3 pt-1">
+                      {/* 3 campos lado a lado */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                        <div className="space-y-1">
+                          <Label className="text-[11px] font-semibold text-slate-700">
+                            Valor em Dinheiro / Taxas (R$)
+                          </Label>
+                          <div className="relative">
+                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
+                              R$
+                            </span>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={cashAmountStr}
+                              onChange={(e) => setCashAmountStr(e.target.value)}
+                              placeholder="0.00"
+                              className="pl-8 text-xs font-semibold tabular-nums bg-white"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-1">
+                          <Label className="text-[11px] font-semibold text-slate-700">
+                            Pontos Utilizados
+                          </Label>
+                          <Input
+                            type="number"
+                            step="1"
+                            min="0"
+                            value={pointsUsedStr}
+                            onChange={(e) => setPointsUsedStr(e.target.value)}
+                            placeholder="Ex: 48100"
+                            className="text-xs font-semibold tabular-nums bg-white"
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <Label className="text-[11px] font-semibold text-slate-700">
+                            Valor da Milha (R$)
+                          </Label>
+                          <div className="relative">
+                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
+                              R$
+                            </span>
+                            <Input
+                              type="number"
+                              step="0.001"
+                              min="0"
+                              value={mileRateStr}
+                              onChange={(e) => setMileRateStr(e.target.value)}
+                              placeholder="0.017"
+                              className="pl-8 text-xs font-semibold tabular-nums bg-white"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Banner de Valor Sugerido com Botão de Aplicação */}
+                      {(() => {
+                        const parsedCash = parseFloat(cashAmountStr.replace(',', '.')) || 0
+                        const parsedPts = parseFloat(pointsUsedStr.replace(',', '.')) || 0
+                        const parsedRate = parseFloat(mileRateStr.replace(',', '.')) || 0.017
+                        const suggested = parseFloat(
+                          (parsedCash + parsedPts * parsedRate).toFixed(2),
+                        )
+
+                        return (
+                          <div className="p-3 rounded-lg bg-white border border-purple-200 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-2.5">
+                            <div className="flex items-center gap-2">
+                              <Calculator className="w-4 h-4 text-purple-600 shrink-0" />
+                              <div className="text-xs text-slate-700">
+                                <span className="font-medium">Valor Sugerido: </span>
+                                <strong className="text-purple-900 font-extrabold text-sm tabular-nums">
+                                  {formatCurrencyBRL(suggested)}
+                                </strong>
+                                <span className="text-slate-600 ml-1">. Deseja aplicar?</span>
+                                <span className="text-[11px] text-slate-500 block sm:inline sm:ml-1.5">
+                                  ({formatCurrencyBRL(parsedCash)} +{' '}
+                                  {parsedPts.toLocaleString('pt-BR')} pts × R${' '}
+                                  {parsedRate.toFixed(3)})
+                                </span>
+                              </div>
+                            </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              onClick={() => {
+                                setAmountStr(suggested.toFixed(2))
+                                toast({
+                                  title: 'Valor sugerido aplicado!',
+                                  description: `Valor total da despesa atualizado para ${formatCurrencyBRL(suggested)}.`,
+                                })
+                              }}
+                              className="bg-purple-700 hover:bg-purple-800 text-white text-xs h-8 px-3 gap-1 shrink-0 font-semibold"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                              <span>Aplicar</span>
+                            </Button>
+                          </div>
+                        )
+                      })()}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Valor Total (R$) */}
               <div className="space-y-1.5">
                 <Label
                   htmlFor="amount"
                   className="text-xs font-semibold text-slate-700 flex items-center gap-1.5"
                 >
                   <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
-                  Valor Total (R$) *
+                  Valor Total da Despesa (R$) *
                 </Label>
                 <div className="relative">
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-400">

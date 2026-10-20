@@ -787,6 +787,11 @@ export default function UploadPage() {
                                 Valor a preencher
                               </span>
                             )}
+                            {ext.points_applied && ext.points_applied > 0 && (
+                              <span className="text-[10px] bg-purple-100 text-purple-800 font-semibold px-2 py-0.5 rounded-full border border-purple-200 block text-center mt-0.5">
+                                + {ext.points_applied.toLocaleString('pt-BR')} pts
+                              </span>
+                            )}
                           </div>
 
                           {/* Trip link dropdown com atalho de desbloqueio */}

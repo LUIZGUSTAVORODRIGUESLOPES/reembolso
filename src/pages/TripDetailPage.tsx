@@ -175,6 +175,38 @@ export default function TripDetailPage() {
     }
 
     setSelectedReceiptFile(file)
+
+    // Detecção OCR em background se o arquivo for imagem/PDF
+    if (file && (file.type.startsWith('image/') || file.type === 'application/pdf')) {
+      processRealReceiptOcr(file)
+        .then((ocrRes) => {
+          if (ocrRes) {
+            if (ocrRes.amount && !newExpAmount) {
+              setNewExpAmount(ocrRes.amount.toFixed(2))
+            }
+            if (ocrRes.merchant_name && !newExpMerchant) {
+              setNewExpMerchant(ocrRes.merchant_name)
+            }
+            if (ocrRes.date && !newExpDate) {
+              setNewExpDate(ocrRes.date)
+            }
+            if (ocrRes.category) {
+              setNewExpCategory(ocrRes.category)
+            }
+            if (ocrRes.points_applied && ocrRes.points_applied > 0) {
+              setNewExpUseMiles(true)
+              setNewExpPointsStr(String(ocrRes.points_applied))
+              if (ocrRes.amount) {
+                setNewExpCashStr(ocrRes.amount.toFixed(2))
+              }
+              setNewExpMileRateStr('0.017')
+            }
+          }
+        })
+        .catch((err) => {
+          console.warn('OCR em background no comprovante manual falhou:', err)
+        })
+    }
   }
 
   // Expense Preview Modal: guarda apenas o ID do lançamento aberto. O objeto
@@ -541,6 +573,10 @@ export default function TripDetailPage() {
       setAddExpenseOpen(false)
       setNewExpMerchant('')
       setNewExpAmount('')
+      setNewExpUseMiles(false)
+      setNewExpCashStr('')
+      setNewExpPointsStr('')
+      setNewExpMileRateStr('0.017')
       setSelectedReceiptFile(null)
       setFileError(null)
       loadTripData()
@@ -1914,7 +1950,25 @@ export default function TripDetailPage() {
                       </td>
 
                       <td className="py-3.5 px-4 text-right font-black text-[#10b981] text-sm tabular-nums">
-                        {formatCurrencyBRL(exp.amount)}
+                        <div>{formatCurrencyBRL(exp.amount)}</div>
+                        {exp.category === 'transporte' &&
+                          (() => {
+                            const parsed =
+                              exp.ocr_raw_text &&
+                              exp.ocr_raw_text !== 'Arquivo sem texto extraído' &&
+                              exp.ocr_raw_text !== 'Nenhum texto legível detectado.'
+                                ? parseBrazilianReceiptText(exp.ocr_raw_text)
+                                : null
+                            const pts = parsed?.points_applied || 0
+                            if (pts > 0) {
+                              return (
+                                <span className="text-[10px] bg-purple-100 text-purple-800 font-semibold px-2 py-0.5 rounded-full border border-purple-200 inline-block mt-0.5 font-sans">
+                                  + {pts.toLocaleString('pt-BR')} pts
+                                </span>
+                              )
+                            }
+                            return null
+                          })()}
                       </td>
 
                       {/* Status Auditoria (pill com borda e diferenciação visual clara) */}
@@ -2131,6 +2185,10 @@ export default function TripDetailPage() {
             if (!open) {
               setSelectedReceiptFile(null)
               setFileError(null)
+              setNewExpUseMiles(false)
+              setNewExpCashStr('')
+              setNewExpPointsStr('')
+              setNewExpMileRateStr('0.017')
             }
           }
         }}

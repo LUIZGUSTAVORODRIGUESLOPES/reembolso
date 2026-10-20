@@ -36,6 +36,7 @@ import {
   Send,
   Download,
   ChevronDown,
+  Calculator,
 } from 'lucide-react'
 import { reportEmailService } from '@/services/reportEmailService'
 import { exportTripToExcel, exportConsolidatedReportPdf } from '@/services/reportExportService'
@@ -95,7 +96,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/hooks/use-toast'
 import { Switch } from '@/components/ui/switch'
-import { parseBrazilianReceiptText } from '@/services/ocrService'
+import { parseBrazilianReceiptText, processRealReceiptOcr } from '@/services/ocrService'
 import { showExpenseDeletedUndoToast, showTripDeletedUndoToast } from '@/services/undoService'
 import { useAuth } from '@/hooks/use-auth'
 import { SettleTripModal } from '@/components/SettleTripModal'
@@ -187,8 +188,8 @@ export default function TripDetailPage() {
             if (ocrRes.merchant_name && !newExpMerchant) {
               setNewExpMerchant(ocrRes.merchant_name)
             }
-            if (ocrRes.date && !newExpDate) {
-              setNewExpDate(ocrRes.date)
+            if (ocrRes.issue_date && !newExpDate) {
+              setNewExpDate(ocrRes.issue_date)
             }
             if (ocrRes.category) {
               setNewExpCategory(ocrRes.category)
@@ -2487,12 +2488,20 @@ export default function TripDetailPage() {
 
                         return (
                           <div className="p-2.5 rounded-lg bg-white border border-purple-200 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-2">
-                            <div className="text-xs text-slate-700">
-                              <span className="font-medium">Valor Sugerido: </span>
-                              <strong className="text-purple-900 font-extrabold tabular-nums">
-                                {formatCurrencyBRL(suggested)}
-                              </strong>
-                              <span className="text-slate-600 ml-1">. Deseja aplicar?</span>
+                            <div className="flex items-center gap-2">
+                              <Calculator className="w-4 h-4 text-purple-600 shrink-0" />
+                              <div className="text-xs text-slate-700">
+                                <span className="font-medium">Valor Sugerido: </span>
+                                <strong className="text-purple-900 font-extrabold tabular-nums">
+                                  {formatCurrencyBRL(suggested)}
+                                </strong>
+                                <span className="text-slate-600 ml-1">. Deseja aplicar?</span>
+                                <span className="text-[11px] text-slate-500 block sm:inline sm:ml-1.5">
+                                  ({formatCurrencyBRL(parsedCash)} +{' '}
+                                  {parsedPts.toLocaleString('pt-BR')} pts × R${' '}
+                                  {parsedRate.toFixed(3)})
+                                </span>
+                              </div>
                             </div>
                             <Button
                               type="button"
@@ -2938,12 +2947,20 @@ export default function TripDetailPage() {
 
                       return (
                         <div className="p-2.5 rounded-lg bg-white border border-purple-200 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-2">
-                          <div className="text-xs text-slate-700">
-                            <span className="font-medium">Valor Sugerido: </span>
-                            <strong className="text-purple-900 font-extrabold tabular-nums">
-                              {formatCurrencyBRL(suggested)}
-                            </strong>
-                            <span className="text-slate-600 ml-1">. Deseja aplicar?</span>
+                          <div className="flex items-center gap-2">
+                            <Calculator className="w-4 h-4 text-purple-600 shrink-0" />
+                            <div className="text-xs text-slate-700">
+                              <span className="font-medium">Valor Sugerido: </span>
+                              <strong className="text-purple-900 font-extrabold tabular-nums">
+                                {formatCurrencyBRL(suggested)}
+                              </strong>
+                              <span className="text-slate-600 ml-1">. Deseja aplicar?</span>
+                              <span className="text-[11px] text-slate-500 block sm:inline sm:ml-1.5">
+                                ({formatCurrencyBRL(parsedCash)} +{' '}
+                                {parsedPts.toLocaleString('pt-BR')} pts × R$ {parsedRate.toFixed(3)}
+                                )
+                              </span>
+                            </div>
                           </div>
                           <Button
                             type="button"

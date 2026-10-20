@@ -140,13 +140,29 @@ export const TRANSPORT_LABELS: Record<TransportType, string> = {
  * se report_sent_at preenchido e status em ('em_triagem','com_pendencias') → retorna 'fechada'.
  */
 export function getEffectiveTripStatus(
-  trip: { status?: TripStatus | string | null; report_sent_at?: string | null } | null | undefined,
+  trip:
+    | {
+        status?: TripStatus | string | null
+        report_sent_at?: string | null
+        reopened_at?: string | null
+      }
+    | null
+    | undefined,
 ): TripStatus {
   if (!trip || !trip.status) return 'em_triagem'
   const currentStatus = trip.status as TripStatus
+
+  // Se a viagem foi reaberta e seu status atual é 'em_triagem', ela está ativamente
+  // desbloqueada para ajustes e inclusão de recibos — NÃO deve ser sobreposta para 'fechada'
+  const isReopened =
+    currentStatus === 'em_triagem' &&
+    Boolean(trip.reopened_at) &&
+    (!trip.report_sent_at || trip.reopened_at >= trip.report_sent_at)
+
   if (
     Boolean(trip.report_sent_at) &&
-    (currentStatus === 'em_triagem' || currentStatus === 'com_pendencias')
+    (currentStatus === 'em_triagem' || currentStatus === 'com_pendencias') &&
+    !isReopened
   ) {
     return 'fechada'
   }
@@ -155,20 +171,28 @@ export function getEffectiveTripStatus(
 
 /**
  * Retorna o status efetivo de uma solicitação avulsa:
- * se report_sent_at preenchido e status for 'em_triagem' → retorna 'empacotada'.
+ * se report_sent_at preenchido e status for 'em_triagem' → retorna 'empacotada',
+ * a menos que tenha sido reaberta via governança.
  */
 export function getEffectiveStandaloneStatus(
   req:
     | {
         status?: 'em_triagem' | 'empacotada' | 'quitada' | string | null
         report_sent_at?: string | null
+        reopened_at?: string | null
       }
     | null
     | undefined,
 ): 'em_triagem' | 'empacotada' | 'quitada' {
   if (!req || !req.status) return 'em_triagem'
   const current = req.status as 'em_triagem' | 'empacotada' | 'quitada'
-  if (Boolean(req.report_sent_at) && current === 'em_triagem') {
+
+  const isReopened =
+    current === 'em_triagem' &&
+    Boolean(req.reopened_at) &&
+    (!req.report_sent_at || req.reopened_at >= req.report_sent_at)
+
+  if (Boolean(req.report_sent_at) && current === 'em_triagem' && !isReopened) {
     return 'empacotada'
   }
   return current

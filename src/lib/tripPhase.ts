@@ -16,16 +16,31 @@ export type TripPhase = 'todas' | 'em_aberto' | 'empacotadas' | 'quitadas'
  * Viagens 'reembolsada' ou 'auditada' (ou 'fechada') preservam seus status.
  */
 export function getEffectiveTripStatus(
-  trip: { status?: TripStatus | string | null; report_sent_at?: string | null } | null | undefined,
+  trip:
+    | {
+        status?: TripStatus | string | null
+        report_sent_at?: string | null
+        reopened_at?: string | null
+      }
+    | null
+    | undefined,
 ): TripStatus {
   if (!trip || !trip.status) return 'em_triagem'
 
   const currentStatus = trip.status as TripStatus
 
+  // Se a viagem foi reaberta e seu status atual é 'em_triagem', ela está ativamente
+  // desbloqueada para ajustes e inclusão de recibos — NÃO deve ser sobreposta para 'fechada'
+  const isReopened =
+    currentStatus === 'em_triagem' &&
+    Boolean(trip.reopened_at) &&
+    (!trip.report_sent_at || trip.reopened_at >= trip.report_sent_at)
+
   // Se já foi enviado relatório e está em triagem ou com pendências, promove defensivamente para fechada
   if (
     Boolean(trip.report_sent_at) &&
-    (currentStatus === 'em_triagem' || currentStatus === 'com_pendencias')
+    (currentStatus === 'em_triagem' || currentStatus === 'com_pendencias') &&
+    !isReopened
   ) {
     return 'fechada'
   }

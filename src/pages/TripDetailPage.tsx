@@ -792,9 +792,15 @@ export default function TripDetailPage() {
     // Regra de bloqueio de edição cadastral:
     // Apenas viagens 'fechada' (com relatório já finalizado) ou 'reembolsada' (quitação definitiva),
     // OU viagens que já tiveram relatório enviado (report_sent_at) têm os campos bloqueados.
-    // Viagens abertas (em_triagem / auditada sem envio) ou reabertas permitem editar destino e período.
+    // Viagens abertas (em_triagem / auditada sem envio) ou reabertas (em_triagem) permitem editar destino e período.
+    const isTripReopened =
+      trip.status === 'em_triagem' &&
+      Boolean(trip.reopened_at) &&
+      (!trip.report_sent_at || trip.reopened_at >= trip.report_sent_at)
     const isEditingLocked =
-      trip.status === 'reembolsada' || trip.status === 'fechada' || Boolean(trip.report_sent_at)
+      trip.status === 'reembolsada' ||
+      trip.status === 'fechada' ||
+      (Boolean(trip.report_sent_at) && !isTripReopened)
 
     // Gatekeeping: impedir fechamento manual ou reembolso se houver comprovantes pendentes
     if ((editStatus === 'fechada' || editStatus === 'reembolsada') && hasPendingExpenses) {
@@ -2567,8 +2573,14 @@ export default function TripDetailPage() {
         // quitadas (reembolsada) ou com report_sent_at preenchido.
         // Viagens abertas (em_triagem e auditada sem relatório enviado) ou reabertas
         // têm os campos de destino, data de início e término 100% liberados para edição.
+        const isTripModalReopened =
+          trip.status === 'em_triagem' &&
+          Boolean(trip.reopened_at) &&
+          (!trip.report_sent_at || trip.reopened_at >= trip.report_sent_at)
         const isEditingBlocked =
-          trip.status === 'reembolsada' || trip.status === 'fechada' || Boolean(trip.report_sent_at)
+          trip.status === 'reembolsada' ||
+          trip.status === 'fechada' ||
+          (Boolean(trip.report_sent_at) && !isTripModalReopened)
 
         // Verificação informativa: despesas com issue_date fora do novo período selecionado
         const outOfRangeExpenses =

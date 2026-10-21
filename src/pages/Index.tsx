@@ -63,7 +63,13 @@ import { useToast } from '@/hooks/use-toast'
 import { showTripDeletedUndoToast } from '@/services/undoService'
 import { useAuth } from '@/hooks/use-auth'
 
-export default function Index() {
+const VALID_PHASES: TripPhase[] = ['todas', 'em_aberto', 'empacotadas', 'quitadas']
+
+export interface IndexProps {
+  defaultPhase?: TripPhase
+}
+
+export default function Index({ defaultPhase = 'em_aberto' }: IndexProps = {}) {
   const { toast } = useToast()
   const navigate = useNavigate()
   const { user, loading: authLoading } = useAuth()
@@ -100,28 +106,53 @@ export default function Index() {
     setSearchParams(newParams, { replace: true })
   }
 
-  const [phaseFilter, setPhaseFilter] = useState<TripPhase>(
-    (searchParams.get('fase') as TripPhase) || 'todas',
-  )
+  const resolvePhaseFromUrl = (): TripPhase => {
+    const rawFase = searchParams.get('fase') as TripPhase | null
+    if (rawFase && VALID_PHASES.includes(rawFase)) {
+      return rawFase
+    }
+    return defaultPhase
+  }
+
+  const [phaseFilter, setPhaseFilter] = useState<TripPhase>(resolvePhaseFromUrl)
   const [periodFilter, setPeriodFilter] = useState<string>('todos')
-  const [statusFilter, setStatusFilter] = useState<string>('todos')
+  const [statusFilter, setStatusFilter] = useState<string>(searchParams.get('status') || 'todos')
   const [modalOpen, setModalOpen] = useState(false)
 
   // Sync internal state if URL parameter 'fase' changes
   useEffect(() => {
-    const f = (searchParams.get('fase') as TripPhase) || 'todas'
+    const f = resolvePhaseFromUrl()
     if (f !== phaseFilter) {
       setPhaseFilter(f)
+    }
+  }, [searchParams, defaultPhase])
+
+  // Sync internal state if URL parameter 'status' changes
+  useEffect(() => {
+    const s = searchParams.get('status') || 'todos'
+    if (s !== statusFilter) {
+      setStatusFilter(s)
     }
   }, [searchParams])
 
   const handlePhaseChange = (newPhase: TripPhase) => {
     setPhaseFilter(newPhase)
     const newParams = new URLSearchParams(searchParams)
-    if (newPhase && newPhase !== 'todas') {
+    if (newPhase && newPhase !== defaultPhase) {
       newParams.set('fase', newPhase)
     } else {
       newParams.delete('fase')
+    }
+    setSearchParams(newParams, { replace: true })
+  }
+
+  const handleStatusChange = (newStatus: string) => {
+    setStatusFilter(newStatus)
+    const newParams = new URLSearchParams(searchParams)
+    if (newStatus && newStatus !== 'todos') {
+      newParams.set('status', newStatus)
+    } else {
+      newParams.delete('status')
     }
     setSearchParams(newParams, { replace: true })
   }
@@ -523,7 +554,7 @@ export default function Index() {
               {/* Filter by Status */}
               <div className="flex items-center gap-1.5 text-xs text-slate-600">
                 <span className="hidden sm:inline">Status:</span>
-                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <Select value={statusFilter} onValueChange={handleStatusChange}>
                   <SelectTrigger className="w-[150px] h-8 text-xs bg-slate-50">
                     <SelectValue placeholder="Todos os status" />
                   </SelectTrigger>

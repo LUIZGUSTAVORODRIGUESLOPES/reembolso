@@ -1,7 +1,17 @@
-import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from 'react'
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  ReactNode,
+  useCallback,
+  useRef,
+} from 'react'
 import { User, Session } from '@supabase/supabase-js'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '@/lib/supabase/client'
 import { Profile } from '@/types/database'
+import { toast } from '@/hooks/use-toast'
 
 interface AuthContextType {
   user: User | null
@@ -32,6 +42,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [session, setSession] = useState<Session | null>(null)
   const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
+
+  const navigate = useNavigate()
+  const location = useLocation()
+  const sessionExpiredToastShownRef = useRef(false)
+  const isLoggingOutRef = useRef(false)
+  const hadPreviousSessionRef = useRef(false)
 
   const fetchProfile = useCallback(
     async (userId: string, currentUser?: User | null): Promise<Profile | null> => {
@@ -199,10 +215,34 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setSession(session)
       setUser(session?.user ?? null)
       if (session?.user?.id) {
+        hadPreviousSessionRef.current = true
+        sessionExpiredToastShownRef.current = false
         fetchProfile(session.user.id, session.user)
       } else {
         setProfile(null)
         setLoading(false)
+
+        // Se a sessão caiu inesperadamente (expiração, falha de refresh ou SIGNED_OUT sem logout intencional)
+        const isUnexpectedSignout =
+          hadPreviousSessionRef.current && !isLoggingOutRef.current && event === 'SIGNED_OUT'
+        if (isUnexpectedSignout && location.pathname !== '/login') {
+          if (!sessionExpiredToastShownRef.current) {
+            sessionExpiredToastShownRef.current = true
+            toast({
+              title: 'Sua sessão expirou.',
+              description: 'Entre novamente para continuar.',
+              variant: 'destructive',
+            })
+          }
+          navigate('/login', {
+            state: {
+              from: {
+                pathname: location.pathname + location.search,
+              },
+            },
+            replace: true,
+          })
+        }
       }
     })
 
@@ -277,6 +317,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }
 
   const signOut = async () => {
+    isLoggingOutRef.current = true
     try {
       const { error } = await supabase.auth.signOut()
       setUser(null)
@@ -285,6 +326,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       return { error }
     } catch (err: any) {
       return { error: err }
+    } finally {
+      setTimeout(() => {
+        isLoggingOutRef.current = false
+      }, 1000)
     }
   }
 

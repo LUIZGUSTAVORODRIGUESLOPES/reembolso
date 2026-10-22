@@ -603,7 +603,7 @@ export default function ReportsPage() {
       {/* Filtros da Central de Relatórios: Alternador de Fase e Busca por Texto */}
       <Card className="border border-slate-200 bg-white shadow-sm p-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-          {/* Alternador de Fase (Em Aberto / Enviadas / Quitadas) */}
+          {/* Alternador de Fase (Todas / Em Aberto / Fechada / Enviadas / Quitadas) */}
           <div className="flex items-center gap-2 flex-wrap">
             <TripPhaseToggle
               value={phaseFilter}

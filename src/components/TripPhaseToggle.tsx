@@ -1,5 +1,5 @@
 import React from 'react'
-import { FolderClock, PackageCheck, CheckCircle2, LayoutGrid } from 'lucide-react'
+import { FolderClock, FileCheck2, PackageCheck, CheckCircle2, LayoutGrid } from 'lucide-react'
 import { TripPhase, PhaseCounts } from '@/lib/tripPhase'
 import { Badge } from '@/components/ui/badge'
 
@@ -52,10 +52,19 @@ export const TripPhaseToggle: React.FC<TripPhaseToggleProps> = ({
       badgeActiveColor: 'bg-blue-100 text-blue-800',
     },
     {
+      id: 'fechadas',
+      label: 'Fechada',
+      shortLabel: 'Fechada',
+      description: '100% conferida, pronta para revisão ou envio',
+      icon: FileCheck2,
+      activeColor: 'bg-white text-amber-900 shadow-sm border-amber-300',
+      badgeActiveColor: 'bg-amber-100 text-amber-800',
+    },
+    {
       id: 'empacotadas',
       label: 'Enviadas',
       shortLabel: 'Enviadas',
-      description: 'Relatório enviado ou auditada/fechada',
+      description: 'Relatório consolidado despachado por e-mail',
       icon: PackageCheck,
       activeColor: 'bg-white text-indigo-900 shadow-sm border-indigo-200',
       badgeActiveColor: 'bg-indigo-100 text-indigo-800',
@@ -107,9 +116,11 @@ export const TripPhaseToggle: React.FC<TripPhaseToggleProps> = ({
                     ? 'text-emerald-600'
                     : item.id === 'empacotadas'
                       ? 'text-indigo-600'
-                      : item.id === 'em_aberto'
-                        ? 'text-blue-600'
-                        : 'text-slate-700'
+                      : item.id === 'fechadas'
+                        ? 'text-amber-600'
+                        : item.id === 'em_aberto'
+                          ? 'text-blue-600'
+                          : 'text-slate-700'
                   : 'text-slate-400'
               }`}
             />

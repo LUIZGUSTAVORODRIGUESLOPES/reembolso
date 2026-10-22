@@ -63,7 +63,7 @@ import { useToast } from '@/hooks/use-toast'
 import { showTripDeletedUndoToast } from '@/services/undoService'
 import { useAuth } from '@/hooks/use-auth'
 
-const VALID_PHASES: TripPhase[] = ['todas', 'em_aberto', 'empacotadas', 'quitadas']
+const VALID_PHASES: TripPhase[] = ['todas', 'em_aberto', 'fechadas', 'empacotadas', 'quitadas']
 
 export interface IndexProps {
   defaultPhase?: TripPhase
@@ -497,7 +497,7 @@ export default function Index({ defaultPhase = 'em_aberto' }: IndexProps = {}) {
               )}
             </div>
 
-            {/* Alternador de Fase da Viagem (Em Aberto / Enviadas / Quitadas) */}
+            {/* Alternador de Fase da Viagem (Todas / Em Aberto / Fechada / Enviadas / Quitadas) */}
             <div className="flex items-center gap-2 flex-wrap">
               <TripPhaseToggle
                 value={phaseFilter}

@@ -32,8 +32,14 @@ interface CreateTripModalProps {
 
 export function CreateTripModal({ open, onOpenChange, onCreated }: CreateTripModalProps) {
   const { toast } = useToast()
-  const { user } = useAuth()
+  const { user, validateSessionAgainstServer } = useAuth()
   const [loading, setLoading] = useState(false)
+
+  React.useEffect(() => {
+    if (open) {
+      validateSessionAgainstServer()
+    }
+  }, [open, validateSessionAgainstServer])
   const [destination, setDestination] = useState('')
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')

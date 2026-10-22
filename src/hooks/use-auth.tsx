@@ -19,6 +19,7 @@ interface AuthContextType {
   profile: Profile | null
   loading: boolean
   isAdmin: boolean
+  validateSessionAgainstServer: () => Promise<boolean>
   refreshProfile: () => Promise<Profile | null>
   signUp: (
     email: string,
@@ -48,6 +49,63 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const sessionExpiredToastShownRef = useRef(false)
   const isLoggingOutRef = useRef(false)
   const hadPreviousSessionRef = useRef(false)
+  const lastServerValidationRef = useRef<number>(0)
+  const isCheckingServerSessionRef = useRef<boolean>(false)
+
+  const handleSessionExpired = useCallback(() => {
+    setUser(null)
+    setSession(null)
+    setProfile(null)
+    setLoading(false)
+
+    if (location.pathname !== '/login') {
+      if (!sessionExpiredToastShownRef.current) {
+        sessionExpiredToastShownRef.current = true
+        toast({
+          title: 'Sua sessão expirou.',
+          description: 'Entre novamente para continuar.',
+          variant: 'destructive',
+        })
+      }
+      navigate('/login', {
+        state: {
+          from: {
+            pathname: location.pathname + location.search,
+          },
+        },
+        replace: true,
+      })
+    }
+  }, [location.pathname, location.search, navigate])
+
+  const validateSessionAgainstServer = useCallback(async (): Promise<boolean> => {
+    // Se estiver fazendo logout voluntário, não interferir
+    if (isLoggingOutRef.current) return false
+    // Se já estiver checando, evita chamadas concorrentes
+    if (isCheckingServerSessionRef.current) return true
+
+    isCheckingServerSessionRef.current = true
+    try {
+      const { data, error } = await supabase.auth.getUser()
+      lastServerValidationRef.current = Date.now()
+
+      if (error || !data.user) {
+        console.warn('Validação de sessão no servidor falhou:', error?.message || 'Usuário ausente')
+        handleSessionExpired()
+        return false
+      }
+
+      // Sessão ainda válida no servidor
+      hadPreviousSessionRef.current = true
+      return true
+    } catch (err) {
+      console.warn('Erro ao validar sessão no servidor:', err)
+      // Se houve exceção grave de rede, não derruba imediatamente a menos que seja 401/invalid token
+      return false
+    } finally {
+      isCheckingServerSessionRef.current = false
+    }
+  }, [handleSessionExpired])
 
   const fetchProfile = useCallback(
     async (userId: string, currentUser?: User | null): Promise<Profile | null> => {
@@ -225,23 +283,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         // Se a sessão caiu inesperadamente (expiração, falha de refresh ou SIGNED_OUT sem logout intencional)
         const isUnexpectedSignout =
           hadPreviousSessionRef.current && !isLoggingOutRef.current && event === 'SIGNED_OUT'
-        if (isUnexpectedSignout && location.pathname !== '/login') {
-          if (!sessionExpiredToastShownRef.current) {
-            sessionExpiredToastShownRef.current = true
-            toast({
-              title: 'Sua sessão expirou.',
-              description: 'Entre novamente para continuar.',
-              variant: 'destructive',
-            })
-          }
-          navigate('/login', {
-            state: {
-              from: {
-                pathname: location.pathname + location.search,
-              },
-            },
-            replace: true,
-          })
+        if (isUnexpectedSignout) {
+          handleSessionExpired()
         }
       }
     })
@@ -250,7 +293,44 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       isMounted = false
       subscription.unsubscribe()
     }
-  }, [fetchProfile])
+  }, [fetchProfile, handleSessionExpired])
+
+  // Listeners de foco e visibilidade da aba com throttle de 30 segundos
+  useEffect(() => {
+    const THROTTLE_MS = 30_000
+
+    const maybeValidate = () => {
+      // Só validar se tínhamos sessão ou usuário ativo
+      if (!hadPreviousSessionRef.current && !user) return
+      // Não validar na tela de login
+      if (location.pathname === '/login') return
+
+      const now = Date.now()
+      if (now - lastServerValidationRef.current < THROTTLE_MS) {
+        return
+      }
+
+      validateSessionAgainstServer()
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        maybeValidate()
+      }
+    }
+
+    const handleWindowFocus = () => {
+      maybeValidate()
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('focus', handleWindowFocus)
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('focus', handleWindowFocus)
+    }
+  }, [user, location.pathname, validateSessionAgainstServer])
 
   const refreshProfile = useCallback(async () => {
     if (!user?.id) return null
@@ -343,6 +423,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         profile,
         loading,
         isAdmin,
+        validateSessionAgainstServer,
         refreshProfile,
         signUp,
         signIn,
@@ -352,4 +433,17 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       {children}
     </AuthContext.Provider>
   )
+}
+
+/**
+ * Hook utilitário para telas ou modais críticos (ex: Upload, Criar Viagem)
+ * que precisam garantir que a sessão do usuário ainda é válida no servidor
+ * assim que o componente é montado ou aberto.
+ */
+export const useSessionGuard = () => {
+  const { validateSessionAgainstServer } = useAuth()
+
+  useEffect(() => {
+    validateSessionAgainstServer()
+  }, [validateSessionAgainstServer])
 }

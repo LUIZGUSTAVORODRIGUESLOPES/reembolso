@@ -27,7 +27,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { useToast } from '@/hooks/use-toast'
-import { useAuth } from '@/hooks/use-auth'
+import { useAuth, useSessionGuard } from '@/hooks/use-auth'
 import { TripSelectorWithUnlock } from '@/components/TripSelectorWithUnlock'
 import { ReopenTripModal } from '@/components/ReopenTripModal'
 
@@ -53,6 +53,7 @@ interface AiTripSuggestion {
 }
 
 export default function UploadPage() {
+  useSessionGuard()
   const navigate = useNavigate()
   const { toast } = useToast()
   const { user, loading: authLoading } = useAuth()

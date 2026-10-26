@@ -98,6 +98,7 @@ import { useToast } from '@/hooks/use-toast'
 import { Switch } from '@/components/ui/switch'
 import { parseBrazilianReceiptText, processRealReceiptOcr } from '@/services/ocrService'
 import { showExpenseDeletedUndoToast, showTripDeletedUndoToast } from '@/services/undoService'
+import { detectDuplicateExpense } from '@/services/duplicateDetectionService'
 import { useAuth } from '@/hooks/use-auth'
 import { SettleTripModal } from '@/components/SettleTripModal'
 import { ReopenTripModal } from '@/components/ReopenTripModal'
@@ -131,6 +132,10 @@ export default function TripDetailPage() {
   const [isUploadingExpense, setIsUploadingExpense] = useState(false)
   const [isDragOverReceipt, setIsDragOverReceipt] = useState(false)
   const fileInputManualRef = React.useRef<HTMLInputElement | null>(null)
+
+  // Alerta de duplicidade na criação manual
+  const [duplicateWarningExpense, setDuplicateWarningExpense] = useState<Expense | null>(null)
+  const [showDuplicateConfirmDialog, setShowDuplicateConfirmDialog] = useState(false)
 
   // Hybrid points / miles for Add Expense modal
   const [newExpUseMiles, setNewExpUseMiles] = useState(false)
@@ -502,6 +507,86 @@ export default function TripDetailPage() {
     loadTripData()
   }
 
+  const executeSaveManualExpense = async (isDuplicateConfirmed = false) => {
+    if (!trip) return
+
+    const parsed = parseFloat(newExpAmount.replace(',', '.'))
+    setIsUploadingExpense(true)
+    try {
+      let uploadedFileUrl = ''
+      let finalFileName = ''
+
+      if (selectedReceiptFile) {
+        finalFileName = selectedReceiptFile.name
+        try {
+          uploadedFileUrl = await storageService.uploadReceiptFile(selectedReceiptFile)
+        } catch (uploadErr) {
+          console.error('Erro ao enviar arquivo para o Supabase Storage:', uploadErr)
+          toast({
+            title: 'Erro no upload do comprovante',
+            description:
+              'Não foi possível salvar o arquivo no armazenamento em nuvem. Tente novamente.',
+            variant: 'destructive',
+          })
+          setIsUploadingExpense(false)
+          return
+        }
+      }
+
+      const auditFlags: string[] = []
+      if (isDuplicateConfirmed || duplicateWarningExpense) {
+        auditFlags.push('comprovante_duplicado')
+      }
+
+      await storageService.createExpense({
+        trip_id: trip.id,
+        file_name: finalFileName || `recibo_manual_${Date.now()}.png`,
+        file_url: uploadedFileUrl || '',
+        issue_date: newExpDate || trip.start_date,
+        category: newExpCategory,
+        merchant_name: newExpMerchant.trim() || 'Comprovante Manual',
+        amount: parsed,
+        ocr_raw_text: selectedReceiptFile
+          ? `Comprovante manual anexado: ${selectedReceiptFile.name}`
+          : 'Comprovante inserido manualmente sem arquivo anexo.',
+        is_verified: true,
+        audit_flags: auditFlags,
+        audit_status: 'conforme',
+      })
+
+      toast({
+        title: isDuplicateConfirmed
+          ? 'Comprovante adicionado (marcado como possível duplicata)'
+          : 'Comprovante adicionado com sucesso!',
+        description: selectedReceiptFile
+          ? 'O arquivo foi enviado e a despesa registrada na prestação de contas.'
+          : 'A despesa foi registrada com sucesso (sem arquivo anexo).',
+      })
+
+      setShowDuplicateConfirmDialog(false)
+      setDuplicateWarningExpense(null)
+      setAddExpenseOpen(false)
+      setNewExpMerchant('')
+      setNewExpAmount('')
+      setNewExpUseMiles(false)
+      setNewExpCashStr('')
+      setNewExpPointsStr('')
+      setNewExpMileRateStr('0.017')
+      setSelectedReceiptFile(null)
+      setFileError(null)
+      loadTripData()
+    } catch (saveErr: any) {
+      console.error('Erro ao criar despesa:', saveErr)
+      toast({
+        title: 'Erro ao adicionar comprovante',
+        description: storageService.formatDatabaseError(saveErr),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsUploadingExpense(false)
+    }
+  }
+
   const handleManualAddExpense = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!trip) return
@@ -526,71 +611,27 @@ export default function TripDetailPage() {
       return
     }
 
-    setIsUploadingExpense(true)
-    try {
-      let uploadedFileUrl = ''
-      let finalFileName = ''
+    // Checagem prévia de duplicidade contra as despesas já existentes nesta viagem
+    const effectiveDate = newExpDate || trip.start_date
+    const effectiveMerchant = newExpMerchant.trim() || 'Comprovante Manual'
 
-      if (selectedReceiptFile) {
-        finalFileName = selectedReceiptFile.name
-        try {
-          uploadedFileUrl = await storageService.uploadReceiptFile(selectedReceiptFile)
-        } catch (uploadErr) {
-          console.error('Erro ao enviar arquivo para o Supabase Storage:', uploadErr)
-          toast({
-            title: 'Erro no upload do comprovante',
-            description:
-              'Não foi possível salvar o arquivo no armazenamento em nuvem. Tente novamente.',
-            variant: 'destructive',
-          })
-          setIsUploadingExpense(false)
-          return
-        }
-      }
-
-      await storageService.createExpense({
-        trip_id: trip.id,
-        file_name: finalFileName || `recibo_manual_${Date.now()}.png`,
-        file_url: uploadedFileUrl || '',
-        issue_date: newExpDate || trip.start_date,
-        category: newExpCategory,
-        merchant_name: newExpMerchant.trim() || 'Comprovante Manual',
+    const dupeCheck = detectDuplicateExpense(
+      {
         amount: parsed,
-        ocr_raw_text: selectedReceiptFile
-          ? `Comprovante manual anexado: ${selectedReceiptFile.name}`
-          : 'Comprovante inserido manualmente sem arquivo anexo.',
-        is_verified: true,
-        audit_flags: [],
-        audit_status: 'conforme',
-      })
+        issue_date: effectiveDate,
+        merchant_name: effectiveMerchant,
+        trip_id: trip.id,
+      },
+      expenses,
+    )
 
-      toast({
-        title: 'Comprovante adicionado com sucesso!',
-        description: selectedReceiptFile
-          ? 'O arquivo foi enviado e a despesa registrada na prestação de contas.'
-          : 'A despesa foi registrada com sucesso (sem arquivo anexo).',
-      })
-
-      setAddExpenseOpen(false)
-      setNewExpMerchant('')
-      setNewExpAmount('')
-      setNewExpUseMiles(false)
-      setNewExpCashStr('')
-      setNewExpPointsStr('')
-      setNewExpMileRateStr('0.017')
-      setSelectedReceiptFile(null)
-      setFileError(null)
-      loadTripData()
-    } catch (saveErr: any) {
-      console.error('Erro ao criar despesa:', saveErr)
-      toast({
-        title: 'Erro ao adicionar comprovante',
-        description: storageService.formatDatabaseError(saveErr),
-        variant: 'destructive',
-      })
-    } finally {
-      setIsUploadingExpense(false)
+    if (dupeCheck.isDuplicate && dupeCheck.matchingExpense) {
+      setDuplicateWarningExpense(dupeCheck.matchingExpense)
+      setShowDuplicateConfirmDialog(true)
+      return
     }
+
+    await executeSaveManualExpense(false)
   }
 
   const loadAvailableTrips = async () => {
@@ -2587,6 +2628,73 @@ export default function TripDetailPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Alerta de Confirmação de Duplicidade na Criação Manual */}
+      <AlertDialog
+        open={showDuplicateConfirmDialog}
+        onOpenChange={(open) => {
+          if (!open) {
+            setShowDuplicateConfirmDialog(false)
+            setDuplicateWarningExpense(null)
+          }
+        }}
+      >
+        <AlertDialogContent className="sm:max-w-[480px]">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-base font-bold text-slate-900 flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0" />
+              <span>Possível Lançamento Duplicado</span>
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-xs text-slate-600 space-y-2 pt-1 text-left">
+              <p>
+                Já existe um lançamento cadastrado nesta viagem com o mesmo fornecedor, valor e
+                data:
+              </p>
+              {duplicateWarningExpense && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs space-y-1 text-amber-950 font-medium">
+                  <div className="flex justify-between items-center">
+                    <span className="font-bold text-slate-900">
+                      {duplicateWarningExpense.merchant_name}
+                    </span>
+                    <span className="text-emerald-700 font-extrabold text-sm tabular-nums">
+                      {formatCurrencyBRL(duplicateWarningExpense.amount)}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-600 flex items-center gap-2">
+                    <span>Data: {formatDateBR(duplicateWarningExpense.issue_date)}</span>
+                    <span>•</span>
+                    <span>Categoria: {CATEGORY_LABELS[duplicateWarningExpense.category]}</span>
+                  </div>
+                </div>
+              )}
+              <p className="text-slate-500 text-[11px] pt-1">
+                Duas despesas com mesmo valor no mesmo dia podem ser legítimas (ex.: duas corridas
+                curtas). Deseja salvar mesmo assim? O item será marcado com alerta para revisão da
+                auditoria.
+              </p>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="pt-2 gap-2 sm:gap-2">
+            <AlertDialogCancel
+              disabled={isUploadingExpense}
+              onClick={() => {
+                setShowDuplicateConfirmDialog(false)
+                setDuplicateWarningExpense(null)
+              }}
+              className="text-xs"
+            >
+              Cancelar e Revisar
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isUploadingExpense}
+              onClick={() => executeSaveManualExpense(true)}
+              className="bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold"
+            >
+              {isUploadingExpense ? 'Salvando...' : 'Sim, Salvar Mesmo Assim'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Edit Trip Details Modal */}
       {(() => {

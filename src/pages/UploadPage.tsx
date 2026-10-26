@@ -166,10 +166,12 @@ export default function UploadPage() {
         // Anti-duplicate check (only if real date + amount were extracted)
         let duplicate: Expense | null = null
         if (extracted.issue_date && extracted.amount) {
+          const targetTripId = findBestTripForDate(extracted.issue_date, existingTrips)
           duplicate = await storageService.findDuplicate({
             issue_date: extracted.issue_date,
             amount: extracted.amount,
             merchant_name: extracted.merchant_name || '',
+            trip_id: targetTripId && targetTripId !== 'new' ? targetTripId : null,
             cnpj: extracted.cnpj || undefined,
           })
         }

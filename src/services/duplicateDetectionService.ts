@@ -93,7 +93,14 @@ export function areMerchantsMatching(m1: string, m2: string): boolean {
   const n2 = normalizeMerchant(m2)
 
   // Se ambos estiverem vazios ou ambos forem genéricos de inserção manual
-  const genericKeywords = ['comprovante manual', 'recibo manual', 'despesa', 'comprovante', 'recibo', '']
+  const genericKeywords = [
+    'comprovante manual',
+    'recibo manual',
+    'despesa',
+    'comprovante',
+    'recibo',
+    '',
+  ]
   const isG1 = genericKeywords.includes(n1)
   const isG2 = genericKeywords.includes(n2)
   if (isG1 && isG2) return true
@@ -106,13 +113,33 @@ export function areMerchantsMatching(m1: string, m2: string): boolean {
     return true
   }
 
-  // Comparação da primeira palavra significativa (ex: "Uber * Trip" e "Uber Eats" ou "Posto Ipiranga" e "Ipiranga")
-  const tokens1 = n1.split(' ').filter((t) => t.length >= 3)
-  const tokens2 = n2.split(' ').filter((t) => t.length >= 3)
+  // Stop words corporativas / sufixos comuns que não caracterizam a marca principal isoladamente
+  const stopWords = new Set([
+    'ltda',
+    'sa',
+    's/a',
+    'brasil',
+    'brazil',
+    'tecnologia',
+    'servicos',
+    'pagamentos',
+    'comercio',
+    'varejista',
+    'me',
+    'epp',
+    'eireli',
+    'trip',
+    'rides',
+    'help',
+  ])
 
+  // Comparação de tokens significativos (ex: "Uber" vs "Uber * Trip" ou "Uber do Brasil Tecnologia Ltda")
+  const tokens1 = n1.split(' ').filter((t) => t.length >= 3 && !stopWords.has(t))
+  const tokens2 = n2.split(' ').filter((t) => t.length >= 3 && !stopWords.has(t))
+
+  // Se ambos tiverem tokens significativos e qualquer um bater (ex: "uber", "latam", "gol", "ipiranga")
   for (const t1 of tokens1) {
     if (tokens2.includes(t1)) {
-      // Se houver token forte em comum como "uber", "latam", "gol", "shell", "ipiranga", etc.
       return true
     }
   }

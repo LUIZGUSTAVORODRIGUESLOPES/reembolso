@@ -223,6 +223,20 @@ export default function TriagePage() {
 
   // Duplicate match details if flagged
   const isDuplicate = currentExpense?.audit_flags?.includes('comprovante_duplicado') || false
+  const duplicateReference = React.useMemo(() => {
+    if (!currentExpense || !isDuplicate) return null
+    // Procura na lista de despesas carregadas aquela que deu match
+    const otherExpenses = expenses.filter((e) => e.id !== currentExpense.id)
+    for (const other of otherExpenses) {
+      if (
+        Math.abs(other.amount - currentExpense.amount) < 0.01 &&
+        other.issue_date === currentExpense.issue_date
+      ) {
+        return other
+      }
+    }
+    return null
+  }, [currentExpense, isDuplicate, expenses])
 
   const handleSave = async (advanceNext = false) => {
     if (!currentExpense) return
@@ -455,14 +469,14 @@ export default function TriagePage() {
               <div className="flex items-center gap-2">
                 <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
                 <span>
-                  ⚠️ Atenção: Este comprovante parece ser duplicado de outra despesa cadastrada em{' '}
-                  {formatDateBR(currentExpense.issue_date)} — {currentExpense.merchant_name} (
-                  {formatCurrencyBRL(currentExpense.amount)})
+                  ⚠️ Atenção: Possível duplicata detectada. Já existe despesa em{' '}
+                  {formatDateBR(duplicateReference?.issue_date || currentExpense.issue_date)} —{' '}
+                  {duplicateReference?.merchant_name || currentExpense.merchant_name} (
+                  {formatCurrencyBRL(duplicateReference?.amount || currentExpense.amount)}).
                 </span>
               </div>
             </div>
           )}
-
           {/* Document Viewer Frame with full PDF / Image / Fallback support */}
           <DocumentViewer
             fileName={currentExpense.file_name}

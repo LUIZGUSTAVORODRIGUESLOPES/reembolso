@@ -884,42 +884,33 @@ class SupabaseStorageService {
     return updated
   }
 
-  // Duplicate Check: same issue_date + exact amount + merchant_name/CNPJ
+  // Duplicate Check: utiliza o serviço unificado de detecção normalizada de duplicidade
   public async findDuplicate(expense: {
     issue_date: string
-    amount: number
+    amount: number | string
     merchant_name: string
+    trip_id?: string | null
     cnpj?: string
     excludeId?: string
   }): Promise<Expense | null> {
-    const all = await this.listExpenses()
-    const normalize = (s: string) =>
-      s
-        .toLowerCase()
-        .replace(/[^a-z0-9]/g, '')
-        .trim()
+    const all = expense.trip_id
+      ? await this.listExpenses(expense.trip_id)
+      : await this.listExpenses()
 
-    const targetMerchant = normalize(expense.merchant_name)
-    const targetCnpj = expense.cnpj ? expense.cnpj.replace(/\D/g, '') : null
+    const { detectDuplicateExpense } = await import('@/services/duplicateDetectionService')
+    const result = detectDuplicateExpense(
+      {
+        amount: expense.amount,
+        issue_date: expense.issue_date,
+        merchant_name: expense.merchant_name,
+        trip_id: expense.trip_id,
+        cnpj: expense.cnpj,
+        excludeExpenseId: expense.excludeId,
+      },
+      all,
+    )
 
-    for (const item of all) {
-      if (expense.excludeId && item.id === expense.excludeId) continue
-
-      const sameDate = item.issue_date === expense.issue_date
-      const sameAmount = Math.abs(item.amount - expense.amount) < 0.01
-
-      if (sameDate && sameAmount) {
-        if (targetCnpj && item.cnpj) {
-          const itemCnpj = item.cnpj.replace(/\D/g, '')
-          if (itemCnpj === targetCnpj) return item
-        }
-        const itemMerchant = normalize(item.merchant_name)
-        if (itemMerchant.includes(targetMerchant) || targetMerchant.includes(itemMerchant)) {
-          return item
-        }
-      }
-    }
-    return null
+    return result.matchingExpense
   }
 
   // Audit Rules Engine

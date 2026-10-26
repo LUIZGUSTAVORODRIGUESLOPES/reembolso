@@ -2,6 +2,11 @@ import { supabase } from '@/lib/supabase/client'
 import { Expense, Trip } from '@/types/database'
 import { normalizeSearchText } from '@/lib/formatters'
 import { processRealReceiptOcr, ProcessedReceiptOcr } from './ocrService'
+import {
+  parseNormalizedAmount,
+  normalizeDateToDay,
+  areMerchantsMatching,
+} from './duplicateDetectionService'
 
 export interface ExpenseSearchResult {
   expense: Expense
@@ -183,32 +188,45 @@ class ReceiptSearchService {
       return result
     }
 
-    const targetDate = new Date(`${date}T00:00:00`)
-    const isValidTargetDate = !isNaN(targetDate.getTime())
+    const targetAmount = parseNormalizedAmount(amount)
+    const targetDay = normalizeDateToDay(date)
+    const targetMerchant = criteria.merchant || ''
 
     for (const item of items) {
       if (excludeExpenseId && item.expense.id === excludeExpenseId) continue
 
-      const itemAmount = Number(item.expense.amount || 0)
-      const isSameAmount = Math.abs(itemAmount - amount) < 0.01
+      const itemAmount = parseNormalizedAmount(item.expense.amount)
+      const isSameAmount = Math.abs(itemAmount - targetAmount) < 0.01
 
       if (!isSameAmount) {
         continue
       }
 
-      // Se tem mesmo valor, checar data
-      if (item.expense.issue_date === date) {
-        // MESMA data E mesmo valor -> IDÊNTICO!
-        if (!result.hasIdentical) {
-          result.hasIdentical = true
-          result.identicalMatch = { ...item, matchType: 'exact_duplicate' }
-        } else {
-          result.nearMatches.push({ ...item, matchType: 'exact_duplicate' })
+      const itemDay = normalizeDateToDay(item.expense.issue_date)
+      const isSameDay = itemDay === targetDay
+
+      // Se tem mesmo valor e mesmo dia normalizado
+      if (isSameDay) {
+        const merchantMatches = targetMerchant
+          ? areMerchantsMatching(targetMerchant, item.expense.merchant_name)
+          : true
+
+        if (merchantMatches) {
+          if (!result.hasIdentical) {
+            result.hasIdentical = true
+            result.identicalMatch = { ...item, matchType: 'exact_duplicate' }
+          } else {
+            result.nearMatches.push({ ...item, matchType: 'exact_duplicate' })
+          }
+          continue
         }
-      } else if (isValidTargetDate && item.expense.issue_date) {
-        // Checar proximidade de dias (+- 2 dias) com mesmo valor
-        const itemDate = new Date(`${item.expense.issue_date}T00:00:00`)
-        if (!isNaN(itemDate.getTime())) {
+      }
+
+      // Proximidade de dias (+- 2 dias) com mesmo valor
+      if (targetDay && itemDay) {
+        const targetDate = new Date(`${targetDay}T12:00:00Z`)
+        const itemDate = new Date(`${itemDay}T12:00:00Z`)
+        if (!isNaN(targetDate.getTime()) && !isNaN(itemDate.getTime())) {
           const diffDays = Math.abs(
             (targetDate.getTime() - itemDate.getTime()) / (1000 * 60 * 60 * 24),
           )

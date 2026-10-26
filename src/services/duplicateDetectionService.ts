@@ -113,31 +113,44 @@ export function areMerchantsMatching(m1: string, m2: string): boolean {
     return true
   }
 
-  // Stop words corporativas / sufixos comuns que não caracterizam a marca principal isoladamente
+  // Palavras genéricas / corporativas a serem ignoradas na comparação de tokens:
+  // linhas, aereas, auto, posto, restaurante, lanchonete, hotel, pousada, estacionamento, locadora, rent, car, ltda, sa, me, epp, comercio, brasil
   const stopWords = new Set([
+    'linhas',
+    'aereas',
+    'auto',
+    'posto',
+    'restaurante',
+    'lanchonete',
+    'hotel',
+    'pousada',
+    'estacionamento',
+    'locadora',
+    'rent',
+    'car',
     'ltda',
     'sa',
     's/a',
+    'me',
+    'epp',
+    'comercio',
     'brasil',
     'brazil',
+    'eireli',
     'tecnologia',
     'servicos',
     'pagamentos',
-    'comercio',
     'varejista',
-    'me',
-    'epp',
-    'eireli',
     'trip',
     'rides',
     'help',
   ])
 
-  // Comparação de tokens significativos (ex: "Uber" vs "Uber * Trip" ou "Uber do Brasil Tecnologia Ltda")
+  // Comparação de tokens significativos (ex: "Azul" vs "Azul Linhas Aéreas", "Unidas" vs "Unidas Locadora")
   const tokens1 = n1.split(' ').filter((t) => t.length >= 3 && !stopWords.has(t))
   const tokens2 = n2.split(' ').filter((t) => t.length >= 3 && !stopWords.has(t))
 
-  // Se ambos tiverem tokens significativos e qualquer um bater (ex: "uber", "latam", "gol", "ipiranga")
+  // Se ambos tiverem tokens significativos e qualquer um bater
   for (const t1 of tokens1) {
     if (tokens2.includes(t1)) {
       return true
@@ -149,11 +162,24 @@ export function areMerchantsMatching(m1: string, m2: string): boolean {
 
 export interface DuplicateDetectionCriteria {
   amount: number | string
-  issue_date: string
-  merchant_name: string
+  issue_date?: string | null
+  merchant_name?: string | null
   trip_id?: string | null
   cnpj?: string | null
+  category?: import('@/types/database').ExpenseCategory | string | null
   excludeExpenseId?: string
+}
+
+export interface DuplicateMatchDetail {
+  expense: Expense
+  matchedRule:
+    | 'rule1_exact_amount_30d'
+    | 'rule2_close_amount_category'
+    | 'rule3_merchant_category_close'
+  priority: number
+  diffDays: number | null
+  diffAmount: number
+  reason: string
 }
 
 export interface DuplicateDetectionResult {
@@ -161,11 +187,61 @@ export interface DuplicateDetectionResult {
   matchingExpense: Expense | null
   matchingExpenses: Expense[]
   reason?: string
+  matchDetails?: DuplicateMatchDetail[]
 }
 
 /**
- * Função utilitária ÚNICA para detecção de duplicidade dentro do escopo da viagem (mesma trip_id).
- * Regra: mesmo fornecedor normalizado + mesmo valor numérico (diferença < R$ 0.01) + mesmo dia.
+ * Calcula a diferença absoluta em dias entre duas datas (formato YYYY-MM-DD).
+ * Retorna null se alguma das datas for vazia ou inválida.
+ */
+export function calculateDateDiffDays(d1: string, d2: string): number | null {
+  if (!d1 || !d2) return null
+  const t1 = new Date(`${d1}T12:00:00Z`).getTime()
+  const t2 = new Date(`${d2}T12:00:00Z`).getTime()
+  if (isNaN(t1) || isNaN(t2)) return null
+  return Math.round(Math.abs((t1 - t2) / (1000 * 60 * 60 * 24)))
+}
+
+function formatBRLValue(val: number): string {
+  return val.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function formatDateBRFromIso(iso: string): string {
+  if (!iso) return 'data não identificada'
+  if (/^\d{4}-\d{2}-\d{2}/.test(iso)) {
+    const [y, m, d] = iso.slice(0, 10).split('-')
+    return `${d}/${m}/${y}`
+  }
+  return iso
+}
+
+/**
+ * Função utilitária unificada para detecção de duplicidade.
+ * O fornecedor NUNCA deve ser pré-requisito para bloquear as Regras 1 e 2.
+ * Uma despesa é marcada como suspeita se atender a QUALQUER UMA destas condições:
+ *
+ * Regra 1 — Mesmo valor em janela de 30 dias (independente de fornecedor/categoria):
+ *   - Math.abs(expAmount - candidateAmount) < 0.01
+ *   - diffDays <= 30 OU uma das datas vazia
+ *   - Motivo: "Mesmo valor (R$ X) encontrado em lançamento de DD/MM/AAAA (diferença de N dias)."
+ *
+ * Regra 2 — Valor muito próximo na mesma categoria (suspeita de erro de OCR no valor):
+ *   - Mesma categoria (candidate.category && exp.category === candidate.category)
+ *   - diffDays <= 7 OU uma das datas vazia
+ *   - a) Mesmos centavos com Math.abs(expAmount - candidateAmount) <= 20.00; OU
+ *   - b) Math.abs(expAmount - candidateAmount) <= 5.00 (ou <= 5% do valor, limitado a R$ 15.00) quando diffDays <= 1
+ *   - Motivo: "Valor muito próximo (R$ X vs R$ Y) para a mesma categoria (possível divergência de leitura OCR)."
+ *
+ * Regra 3 — Mesmo tipo + mesmo fornecedor com valor próximo:
+ *   - Mesma categoria E (areMerchantsMatching OU CNPJ igual)
+ *   - diffDays <= 30 (ou uma das datas vazia)
+ *   - Diferença de valor de até 10% ou R$ 15,00
+ *   - Motivo: "Mesmo fornecedor/referência e categoria com valor próximo (R$ X) em DD/MM/AAAA."
+ *
+ * Ordenação priorizando:
+ *   1º mesmo valor + mesmo dia (priority = 1)
+ *   2º mesmo valor + fornecedor compatível (priority = 2)
+ *   3º menor diferença de dias/valor (priority = 3)
  */
 export function detectDuplicateExpense(
   candidate: DuplicateDetectionCriteria,
@@ -174,8 +250,11 @@ export function detectDuplicateExpense(
   const candidateAmount = parseNormalizedAmount(candidate.amount)
   const candidateDay = normalizeDateToDay(candidate.issue_date)
   const candidateCnpj = candidate.cnpj ? candidate.cnpj.replace(/\D/g, '') : null
+  const candidateCategory = candidate.category ? String(candidate.category).trim() : null
+  const candidateMerchant = candidate.merchant_name || ''
 
-  if (candidateAmount <= 0 || !candidateDay) {
+  // Se o valor do candidato for <= 0, não é possível avaliar duplicidade
+  if (candidateAmount <= 0) {
     return {
       isDuplicate: false,
       matchingExpense: null,
@@ -183,7 +262,7 @@ export function detectDuplicateExpense(
     }
   }
 
-  const matches: Expense[] = []
+  const matchDetails: DuplicateMatchDetail[] = []
 
   for (const exp of tripExpenses) {
     // Ignora a própria despesa se estiver editando
@@ -197,14 +276,15 @@ export function detectDuplicateExpense(
     }
 
     const expAmount = parseNormalizedAmount(exp.amount)
-    const isSameAmount = Math.abs(expAmount - candidateAmount) < 0.01
-    if (!isSameAmount) continue
+    if (expAmount <= 0) continue
 
     const expDay = normalizeDateToDay(exp.issue_date)
-    const isSameDay = expDay === candidateDay
-    if (!isSameDay) continue
+    const diffDays = calculateDateDiffDays(candidateDay, expDay)
+    const isDateWithin30 = diffDays === null || diffDays <= 30
+    const diffAmount = Math.abs(expAmount - candidateAmount)
+    const isSameAmount = diffAmount < 0.01
 
-    // Verifica CNPJ se ambos tiverem
+    // Comparações auxiliares de fornecedor / CNPJ
     let cnpjMatched = false
     if (candidateCnpj && exp.cnpj) {
       const expCnpj = exp.cnpj.replace(/\D/g, '')
@@ -212,22 +292,114 @@ export function detectDuplicateExpense(
         cnpjMatched = true
       }
     }
+    const merchantMatched = Boolean(
+      (candidateMerchant &&
+        exp.merchant_name &&
+        areMerchantsMatching(candidateMerchant, exp.merchant_name)) ||
+      cnpjMatched,
+    )
 
-    // Verifica fornecedor normalizado
-    const merchantMatched = areMerchantsMatching(candidate.merchant_name, exp.merchant_name)
+    const isSameCategory = Boolean(
+      candidateCategory && exp.category && candidateCategory === exp.category,
+    )
 
-    if (cnpjMatched || merchantMatched) {
-      matches.push(exp)
+    let matched = false
+    let matchedRule: DuplicateMatchDetail['matchedRule'] = 'rule1_exact_amount_30d'
+    let reasonText = ''
+
+    // REGRA 1: Mesmo valor em janela de 30 dias (independente de fornecedor/categoria)
+    if (isSameAmount && isDateWithin30) {
+      matched = true
+      matchedRule = 'rule1_exact_amount_30d'
+      const dateText = formatDateBRFromIso(expDay)
+      const diffText =
+        diffDays !== null ? ` (diferença de ${diffDays} dia${diffDays === 1 ? '' : 's'})` : ''
+      reasonText = `Mesmo valor (R$ ${formatBRLValue(candidateAmount)}) encontrado em lançamento de ${dateText}${diffText}.`
+    }
+
+    // REGRA 2: Valor muito próximo na mesma categoria (suspeita de erro de OCR no valor)
+    if (!matched && isSameCategory) {
+      const isDateWithin7 = diffDays === null || diffDays <= 7
+      if (isDateWithin7) {
+        // a) Mesmos centavos com diferença de até R$ 20,00
+        const expCents = Math.round((expAmount % 1) * 100)
+        const candCents = Math.round((candidateAmount % 1) * 100)
+        const sameCentsAndWithin20 = expCents === candCents && diffAmount <= 20.0 + 1e-4
+
+        // b) Diferença absoluta <= R$ 5,00 (ou <= 5% do valor, limitado a R$ 15,00) quando na mesma data (diffDays <= 1)
+        const isSameOrNearDay = diffDays === null || diffDays <= 1
+        const maxAllowedNearDay = Math.min(15.0, Math.max(5.0, candidateAmount * 0.05))
+        const closeValueSameDay = isSameOrNearDay && diffAmount <= maxAllowedNearDay + 1e-4
+
+        if (sameCentsAndWithin20 || closeValueSameDay) {
+          matched = true
+          matchedRule = 'rule2_close_amount_category'
+          reasonText = `Valor muito próximo (R$ ${formatBRLValue(candidateAmount)} vs R$ ${formatBRLValue(expAmount)}) para a mesma categoria (possível divergência de leitura OCR).`
+        }
+      }
+    }
+
+    // REGRA 3: Mesmo tipo + mesmo fornecedor (referência parcial) com valor próximo
+    if (!matched && isSameCategory && merchantMatched && isDateWithin30) {
+      const maxAllowedDiff = Math.max(15.0, candidateAmount * 0.1)
+      if (diffAmount <= maxAllowedDiff + 1e-4) {
+        matched = true
+        matchedRule = 'rule3_merchant_category_close'
+        const dateText = formatDateBRFromIso(expDay)
+        reasonText = `Mesmo fornecedor/referência e categoria com valor próximo (R$ ${formatBRLValue(expAmount)}) em ${dateText}.`
+      }
+    }
+
+    if (matched) {
+      // Prioridade:
+      // 1º: mesmo valor + mesmo dia
+      // 2º: mesmo valor + fornecedor compatível
+      // 3º: menor diferença de dias/valor
+      let priority = 3
+      if (isSameAmount && diffDays === 0) {
+        priority = 1
+      } else if (isSameAmount && merchantMatched) {
+        priority = 2
+      } else {
+        priority = 3
+      }
+
+      matchDetails.push({
+        expense: exp,
+        matchedRule,
+        priority,
+        diffDays,
+        diffAmount,
+        reason: reasonText,
+      })
     }
   }
 
-  const isDuplicate = matches.length > 0
+  // Ordenar priorizando:
+  // 1º priority menor (1 antes de 2 antes de 3)
+  // 2º menor diferença de dias (dias null tratados com peso intermediário, ex: 15)
+  // 3º menor diferença de valor
+  matchDetails.sort((a, b) => {
+    if (a.priority !== b.priority) {
+      return a.priority - b.priority
+    }
+    const daysA = a.diffDays === null ? 15 : a.diffDays
+    const daysB = b.diffDays === null ? 15 : b.diffDays
+    if (daysA !== daysB) {
+      return daysA - daysB
+    }
+    return a.diffAmount - b.diffAmount
+  })
+
+  const matchingExpenses = matchDetails.map((m) => m.expense)
+  const isDuplicate = matchDetails.length > 0
+  const topMatch = matchDetails[0] || null
+
   return {
     isDuplicate,
-    matchingExpense: matches[0] || null,
-    matchingExpenses: matches,
-    reason: isDuplicate
-      ? `Encontrado(s) ${matches.length} lançamento(s) com o mesmo fornecedor, valor idêntico e mesma data nesta viagem.`
-      : undefined,
+    matchingExpense: topMatch?.expense || null,
+    matchingExpenses,
+    reason: topMatch?.reason,
+    matchDetails,
   }
 }

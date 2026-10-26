@@ -142,11 +142,13 @@ export function ReceiptSearchCard({ initialQuery = '', onClose }: ReceiptSearchC
   // Handle manual duplicate re-check
   const handleManualCheck = () => {
     const parsedAmt = parseFloat(manualAmount.replace(',', '.'))
-    if (isNaN(parsedAmt) || !manualDate) return
+    if (isNaN(parsedAmt) || parsedAmt <= 0) return
 
     const res = receiptSearchService.verifyDuplicate(expenses, {
       amount: parsedAmt,
-      date: manualDate,
+      date: manualDate || null,
+      merchant: duplicateResult?.ocrData?.merchant_name || null,
+      category: duplicateResult?.ocrData?.category || null,
     })
     setDuplicateResult({
       ...res,
@@ -473,19 +475,18 @@ export function ReceiptSearchCard({ initialQuery = '', onClose }: ReceiptSearchC
                           </div>
                           <div className="space-y-1">
                             <h4 className="text-sm font-bold text-amber-950 flex items-center gap-1.5">
-                              ⚠️ Atenção: Um recibo com este valor e data já está vinculado à viagem{' '}
-                              <span className="underline decoration-amber-600 underline-offset-2">
-                                {duplicateResult.identicalMatch.trip?.destination || 'Sem Destino'}
-                              </span>{' '}
-                              em{' '}
-                              <span>
-                                {formatDateBR(duplicateResult.identicalMatch.expense.issue_date)}
-                              </span>
+                              ⚠️ Atenção: Possível duplicidade detectada
                             </h4>
-                            <p className="text-xs text-amber-800">
-                              Detectamos um comprovante idêntico já registrado no sistema para este
-                              colaborador ou viagem. Evite duplicidade acidental de reembolso.
-                            </p>
+                            {duplicateResult.identicalMatch.matchReason ? (
+                              <p className="text-xs font-medium text-amber-900 bg-amber-100/70 p-1.5 rounded border border-amber-200">
+                                {duplicateResult.identicalMatch.matchReason}
+                              </p>
+                            ) : (
+                              <p className="text-xs text-amber-800">
+                                Um recibo com valor ou características similares já está cadastrado
+                                no sistema.
+                              </p>
+                            )}
                           </div>
                         </div>
 
@@ -496,7 +497,7 @@ export function ReceiptSearchCard({ initialQuery = '', onClose }: ReceiptSearchC
                               {duplicateResult.identicalMatch.expense.merchant_name ||
                                 'Estabelecimento'}
                             </span>
-                            <div className="text-[11px] text-slate-600 flex items-center gap-2 mt-0.5">
+                            <div className="text-[11px] text-slate-600 flex items-center gap-2 mt-0.5 flex-wrap">
                               <span>
                                 Valor:{' '}
                                 <strong className="text-emerald-700">
@@ -510,6 +511,17 @@ export function ReceiptSearchCard({ initialQuery = '', onClose }: ReceiptSearchC
                                   {formatDateBR(duplicateResult.identicalMatch.expense.issue_date)}
                                 </strong>
                               </span>
+                              {duplicateResult.identicalMatch.trip && (
+                                <>
+                                  <span>•</span>
+                                  <span>
+                                    Viagem:{' '}
+                                    <strong className="text-blue-700">
+                                      {duplicateResult.identicalMatch.trip.destination}
+                                    </strong>
+                                  </span>
+                                </>
+                              )}
                             </div>
                           </div>
 
@@ -535,35 +547,42 @@ export function ReceiptSearchCard({ initialQuery = '', onClose }: ReceiptSearchC
                         </div>
                         <div className="space-y-0.5">
                           <h4 className="text-sm font-bold text-emerald-950">
-                            Nenhum recibo idêntico encontrado
+                            Nenhum recibo idêntico ou suspeito encontrado
                           </h4>
                           <p className="text-xs text-emerald-800">
                             Não encontramos nenhum comprovante cadastrado com valor de{' '}
                             <strong>
                               {formatCurrencyBRL(duplicateResult.searchedCriteria.amount || 0)}
                             </strong>{' '}
-                            na data de{' '}
-                            <strong>
-                              {formatDateBR(duplicateResult.searchedCriteria.date || '')}
-                            </strong>
-                            . O comprovante está liberado para inclusão.
+                            {duplicateResult.searchedCriteria.date ? (
+                              <>
+                                na data de{' '}
+                                <strong>
+                                  {formatDateBR(duplicateResult.searchedCriteria.date)}
+                                </strong>{' '}
+                                (janela de 30 dias).
+                              </>
+                            ) : (
+                              'nos últimos 30 dias.'
+                            )}{' '}
+                            O comprovante está liberado para inclusão.
                           </p>
                         </div>
                       </div>
                     )}
 
-                    {/* Alerta Secundário de Correspondências Próximas (mesmo valor, +- 2 dias) */}
+                    {/* Alerta Secundário de Correspondências Próximas */}
                     {duplicateResult.nearMatches.length > 0 && (
                       <div className="p-3.5 rounded-lg border border-blue-200 bg-blue-50/60 space-y-2">
                         <div className="flex items-center gap-2 text-xs font-bold text-blue-900">
                           <Clock className="w-4 h-4 text-blue-600" />
                           <span>
-                            Possível duplicidade aproximada detectada (
+                            Outras possíveis correspondências detectadas (
                             {duplicateResult.nearMatches.length}):
                           </span>
                         </div>
                         <div className="space-y-1.5">
-                          {duplicateResult.nearMatches.map(({ expense, trip }) => (
+                          {duplicateResult.nearMatches.map(({ expense, trip, matchReason }) => (
                             <div
                               key={expense.id}
                               className="p-2.5 bg-white rounded border border-blue-100 flex items-center justify-between text-xs"
@@ -576,6 +595,11 @@ export function ReceiptSearchCard({ initialQuery = '', onClose }: ReceiptSearchC
                                   {formatDateBR(expense.issue_date)} •{' '}
                                   {formatCurrencyBRL(expense.amount)}
                                 </span>
+                                {matchReason && (
+                                  <span className="text-[10px] text-amber-700 block mt-0.5">
+                                    {matchReason}
+                                  </span>
+                                )}
                                 {trip && (
                                   <span className="text-[10px] text-blue-600 block">
                                     Viagem: {trip.destination}

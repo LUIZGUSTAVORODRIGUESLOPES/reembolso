@@ -5,24 +5,27 @@ import { processRealReceiptOcr, ProcessedReceiptOcr } from './ocrService'
 import {
   parseNormalizedAmount,
   normalizeDateToDay,
-  areMerchantsMatching,
+  detectDuplicateExpense,
 } from './duplicateDetectionService'
 
 export interface ExpenseSearchResult {
   expense: Expense
   trip: Trip | null
   matchType?: 'exact_duplicate' | 'close_match' | 'text_match'
+  matchReason?: string
 }
 
 export interface DuplicateCheckResult {
   hasIdentical: boolean
   identicalMatch: ExpenseSearchResult | null
   nearMatches: ExpenseSearchResult[]
+  reason?: string
   ocrData?: ProcessedReceiptOcr
   searchedCriteria: {
     amount: number | null
     date: string | null
     merchant?: string | null
+    category?: string | null
   }
 }
 
@@ -158,84 +161,85 @@ class ReceiptSearchService {
   }
 
   /**
-   * Verifica se já existe um recibo cadastrado idêntico ou muito próximo:
-   * Idêntico: MESMA data E MESMO valor (com tolerância de centavos <= 0.01)
-   * Próximo: MESMO valor E data dentro de +- 2 dias
+   * Verifica duplicidade delegando para o motor unificado detectDuplicateExpense:
+   * Funciona mesmo quando a data for nula/não identificada pelo OCR,
+   * cobrindo janela de 30 dias, proximidade de centavos/valor na mesma categoria
+   * e mesmo fornecedor + categoria com valor próximo.
    */
   public verifyDuplicate(
     items: ExpenseSearchResult[],
     criteria: {
       amount: number | null
-      date: string | null
+      date?: string | null
       merchant?: string | null
+      category?: string | null
+      cnpj?: string | null
       excludeExpenseId?: string
     },
   ): DuplicateCheckResult {
-    const { amount, date, excludeExpenseId } = criteria
+    const { amount, date, merchant, category, cnpj, excludeExpenseId } = criteria
 
     const result: DuplicateCheckResult = {
       hasIdentical: false,
       identicalMatch: null,
       nearMatches: [],
+      reason: undefined,
       searchedCriteria: {
         amount,
-        date,
-        merchant: criteria.merchant,
+        date: date || null,
+        merchant: merchant || null,
+        category: category || null,
       },
     }
 
-    if (amount === null || !date) {
+    if (amount === null || amount === undefined || Number(amount) <= 0) {
       return result
     }
 
-    const targetAmount = parseNormalizedAmount(amount)
-    const targetDay = normalizeDateToDay(date)
-    const targetMerchant = criteria.merchant || ''
+    // Mapa de itens para recuperar o trip do ExpenseSearchResult
+    const itemMap = new Map<string, ExpenseSearchResult>()
+    const expenseList: Expense[] = []
 
     for (const item of items) {
-      if (excludeExpenseId && item.expense.id === excludeExpenseId) continue
-
-      const itemAmount = parseNormalizedAmount(item.expense.amount)
-      const isSameAmount = Math.abs(itemAmount - targetAmount) < 0.01
-
-      if (!isSameAmount) {
-        continue
-      }
-
-      const itemDay = normalizeDateToDay(item.expense.issue_date)
-      const isSameDay = itemDay === targetDay
-
-      // Se tem mesmo valor e mesmo dia normalizado
-      if (isSameDay) {
-        const merchantMatches = targetMerchant
-          ? areMerchantsMatching(targetMerchant, item.expense.merchant_name)
-          : true
-
-        if (merchantMatches) {
-          if (!result.hasIdentical) {
-            result.hasIdentical = true
-            result.identicalMatch = { ...item, matchType: 'exact_duplicate' }
-          } else {
-            result.nearMatches.push({ ...item, matchType: 'exact_duplicate' })
-          }
-          continue
-        }
-      }
-
-      // Proximidade de dias (+- 2 dias) com mesmo valor
-      if (targetDay && itemDay) {
-        const targetDate = new Date(`${targetDay}T12:00:00Z`)
-        const itemDate = new Date(`${itemDay}T12:00:00Z`)
-        if (!isNaN(targetDate.getTime()) && !isNaN(itemDate.getTime())) {
-          const diffDays = Math.abs(
-            (targetDate.getTime() - itemDate.getTime()) / (1000 * 60 * 60 * 24),
-          )
-          if (diffDays <= 2) {
-            result.nearMatches.push({ ...item, matchType: 'close_match' })
-          }
-        }
-      }
+      itemMap.set(item.expense.id, item)
+      expenseList.push(item.expense)
     }
+
+    const dupeDetection = detectDuplicateExpense(
+      {
+        amount,
+        issue_date: date || null,
+        merchant_name: merchant || '',
+        category: category || null,
+        cnpj: cnpj || null,
+        excludeExpenseId,
+      },
+      expenseList,
+    )
+
+    if (!dupeDetection.isDuplicate || !dupeDetection.matchingExpense) {
+      return result
+    }
+
+    const matchDetails = dupeDetection.matchDetails || []
+    result.reason = dupeDetection.reason
+
+    matchDetails.forEach((detail, index) => {
+      const parentSearchResult = itemMap.get(detail.expense.id)
+      const mappedResult: ExpenseSearchResult = {
+        expense: detail.expense,
+        trip: parentSearchResult?.trip || null,
+        matchType: detail.priority === 1 ? 'exact_duplicate' : 'close_match',
+        matchReason: detail.reason,
+      }
+
+      if (index === 0) {
+        result.hasIdentical = true
+        result.identicalMatch = mappedResult
+      } else {
+        result.nearMatches.push(mappedResult)
+      }
+    })
 
     return result
   }
@@ -254,6 +258,8 @@ class ReceiptSearchService {
       amount: ocrResult.amount,
       date: ocrResult.issue_date,
       merchant: ocrResult.merchant_name,
+      category: ocrResult.category,
+      cnpj: ocrResult.cnpj,
     })
 
     return {

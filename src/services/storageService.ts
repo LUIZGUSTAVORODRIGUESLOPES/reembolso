@@ -884,18 +884,17 @@ class SupabaseStorageService {
     return updated
   }
 
-  // Duplicate Check: utiliza o serviço unificado de detecção normalizada de duplicidade
+  // Duplicate Check: busca em todas as despesas globais para que comprovante de outra viagem recente seja detectado
   public async findDuplicate(expense: {
-    issue_date: string
+    issue_date?: string | null
     amount: number | string
-    merchant_name: string
+    merchant_name?: string | null
     trip_id?: string | null
-    cnpj?: string
+    cnpj?: string | null
+    category?: ExpenseCategory | string | null
     excludeId?: string
   }): Promise<Expense | null> {
-    const all = expense.trip_id
-      ? await this.listExpenses(expense.trip_id)
-      : await this.listExpenses()
+    const all = await this.listExpenses()
 
     const { detectDuplicateExpense } = await import('@/services/duplicateDetectionService')
     const result = detectDuplicateExpense(
@@ -903,8 +902,9 @@ class SupabaseStorageService {
         amount: expense.amount,
         issue_date: expense.issue_date,
         merchant_name: expense.merchant_name,
-        trip_id: expense.trip_id,
+        trip_id: null, // Escopo global para encontrar duplicidades inter-viagens
         cnpj: expense.cnpj,
+        category: expense.category,
         excludeExpenseId: expense.excludeId,
       },
       all,

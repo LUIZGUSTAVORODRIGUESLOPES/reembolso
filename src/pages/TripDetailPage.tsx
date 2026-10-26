@@ -135,6 +135,7 @@ export default function TripDetailPage() {
 
   // Alerta de duplicidade na criação manual
   const [duplicateWarningExpense, setDuplicateWarningExpense] = useState<Expense | null>(null)
+  const [duplicateWarningReason, setDuplicateWarningReason] = useState<string | null>(null)
   const [showDuplicateConfirmDialog, setShowDuplicateConfirmDialog] = useState(false)
 
   // Hybrid points / miles for Add Expense modal
@@ -565,6 +566,7 @@ export default function TripDetailPage() {
 
       setShowDuplicateConfirmDialog(false)
       setDuplicateWarningExpense(null)
+      setDuplicateWarningReason(null)
       setAddExpenseOpen(false)
       setNewExpMerchant('')
       setNewExpAmount('')
@@ -620,6 +622,7 @@ export default function TripDetailPage() {
         amount: parsed,
         issue_date: effectiveDate,
         merchant_name: effectiveMerchant,
+        category: newExpCategory,
         trip_id: trip.id,
       },
       expenses,
@@ -627,6 +630,7 @@ export default function TripDetailPage() {
 
     if (dupeCheck.isDuplicate && dupeCheck.matchingExpense) {
       setDuplicateWarningExpense(dupeCheck.matchingExpense)
+      setDuplicateWarningReason(dupeCheck.reason || null)
       setShowDuplicateConfirmDialog(true)
       return
     }
@@ -2636,6 +2640,7 @@ export default function TripDetailPage() {
           if (!open) {
             setShowDuplicateConfirmDialog(false)
             setDuplicateWarningExpense(null)
+            setDuplicateWarningReason(null)
           }
         }}
       >
@@ -2646,10 +2651,15 @@ export default function TripDetailPage() {
               <span>Possível Lançamento Duplicado</span>
             </AlertDialogTitle>
             <AlertDialogDescription className="text-xs text-slate-600 space-y-2 pt-1 text-left">
-              <p>
-                Já existe um lançamento cadastrado nesta viagem com o mesmo fornecedor, valor e
-                data:
-              </p>
+              {duplicateWarningReason ? (
+                <p className="font-semibold text-amber-900 bg-amber-100/70 p-2 rounded border border-amber-200">
+                  {duplicateWarningReason}
+                </p>
+              ) : (
+                <p>
+                  Já existe um lançamento cadastrado no sistema correspondente a este comprovante:
+                </p>
+              )}
               {duplicateWarningExpense && (
                 <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs space-y-1 text-amber-950 font-medium">
                   <div className="flex justify-between items-center">
@@ -2680,6 +2690,7 @@ export default function TripDetailPage() {
               onClick={() => {
                 setShowDuplicateConfirmDialog(false)
                 setDuplicateWarningExpense(null)
+                setDuplicateWarningReason(null)
               }}
               className="text-xs"
             >

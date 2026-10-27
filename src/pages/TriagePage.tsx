@@ -20,13 +20,27 @@ import {
 import { storageService } from '@/services/storageService'
 import { Expense, Trip, ExpenseCategory } from '@/types/database'
 import { formatCurrencyBRL, formatDateBR, CATEGORY_LABELS } from '@/lib/formatters'
-import { parseBrazilianReceiptText } from '@/services/ocrService'
+import {
+  parseBrazilianReceiptText,
+  reprocessAndExtractMultipleReceipts,
+  MultiReceiptItem,
+} from '@/services/ocrService'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
-import { Sparkles, Calculator, Check, Info } from 'lucide-react'
+import {
+  Sparkles,
+  Calculator,
+  Check,
+  Info,
+  Files,
+  Plus,
+  X,
+  Loader2,
+  HelpCircle,
+} from 'lucide-react'
 import {
   Select,
   SelectContent,
@@ -79,6 +93,21 @@ export default function TriagePage() {
   const [cashAmountStr, setCashAmountStr] = useState('')
   const [pointsUsedStr, setPointsUsedStr] = useState('')
   const [mileRateStr, setMileRateStr] = useState('0.017')
+
+  // Multi-receipt and PDF pages state
+  const [docPageInfo, setDocPageInfo] = useState<{ isPdf: boolean; totalPages: number }>({
+    isPdf: false,
+    totalPages: 1,
+  })
+  // Track decision per expense ID: 'single' | 'multiple' | null
+  const [multiPageDecision, setMultiPageDecision] = useState<Record<string, 'single' | 'multiple'>>(
+    {},
+  )
+  const [multiReceiptActive, setMultiReceiptActive] = useState(false)
+  const [multiReceiptItems, setMultiReceiptItems] = useState<MultiReceiptItem[]>([])
+  const [reprocessing, setReprocessing] = useState(false)
+  const [reprocessingProgress, setReprocessingProgress] = useState(0)
+  const [reprocessingStatus, setReprocessingStatus] = useState('')
 
   // Dialogs
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
@@ -217,9 +246,74 @@ export default function TriagePage() {
       setMileRateStr('0.017')
     }
 
+    // Reset multi-receipt panel states for newly selected expense
+    setMultiReceiptActive(false)
+    setMultiReceiptItems([])
+    setDocPageInfo({ isPdf: false, totalPages: 1 })
+
     // Assigned trip: preserve expense trip_id or select first available trip
     setAssignedTripId(currentExpense.trip_id || (trips[0]?.id ?? ''))
   }, [currentIndex, currentExpense, trips])
+
+  // Triggers reprocessAndExtractMultipleReceipts
+  const handleTriggerReprocessMultiple = async () => {
+    if (!currentExpense) return
+    setReprocessing(true)
+    setReprocessingProgress(5)
+    setReprocessingStatus('Iniciando análise de múltiplos comprovantes...')
+    setMultiReceiptActive(true)
+
+    try {
+      const res = await reprocessAndExtractMultipleReceipts(
+        currentExpense.file_url,
+        currentExpense.file_name,
+        currentExpense.ocr_raw_text,
+        (progress, status) => {
+          setReprocessingProgress(progress)
+          setReprocessingStatus(status)
+        },
+      )
+
+      setMultiReceiptItems(res.items)
+      if (res.totalSum > 0) {
+        setAmountStr(res.totalSum.toFixed(2))
+      }
+
+      toast({
+        title: 'Múltiplos recibos detectados!',
+        description: `${res.items.length} comprovante(s) identificados com soma de ${formatCurrencyBRL(res.totalSum)}.`,
+      })
+    } catch (err: any) {
+      console.warn('Erro ao reprocessar múltiplos recibos:', err)
+      toast({
+        title: 'Atenção ao reprocessar',
+        description:
+          err?.message ||
+          'Não foi possível extrair automaticamente todos os recibos. Você pode adicioná-los manualmente.',
+        variant: 'destructive',
+      })
+      // Provide fallback items so user can type them manually
+      setMultiReceiptItems([
+        { id: 'p1', label: 'Item 1', amount: parseFloat(amountStr) || 0 },
+        { id: 'p2', label: 'Item 2', amount: 0 },
+      ])
+    } finally {
+      setReprocessing(false)
+    }
+  }
+
+  // Multi-receipt helper: calculate current total
+  const multiReceiptCalculatedTotal = React.useMemo(() => {
+    return Number(
+      multiReceiptItems.reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0).toFixed(2),
+    )
+  }, [multiReceiptItems])
+
+  // Check if save is blocked by unconfirmed multi-page prompt
+  const currentExpenseDecision = currentExpense ? multiPageDecision[currentExpense.id] : null
+  const isMultiPagePdf = docPageInfo.isPdf && docPageInfo.totalPages > 1
+  const isMultiPagePendingDecision =
+    isMultiPagePdf && !currentExpenseDecision && !multiReceiptActive
 
   // Duplicate match details if flagged
   const isDuplicate = currentExpense?.audit_flags?.includes('comprovante_duplicado') || false
@@ -240,6 +334,15 @@ export default function TriagePage() {
 
   const handleSave = async (advanceNext = false) => {
     if (!currentExpense) return
+
+    if (isMultiPagePendingDecision) {
+      toast({
+        title: 'Confirmação necessária',
+        description: `Este arquivo possui ${docPageInfo.totalPages} páginas. Escolha se deseja manter como recibo único ou somar múltiplos recibos antes de salvar.`,
+        variant: 'destructive',
+      })
+      return
+    }
 
     const parsedAmount = parseFloat(amountStr.replace(',', '.'))
     if (isNaN(parsedAmount) || parsedAmount <= 0) {
@@ -482,6 +585,9 @@ export default function TriagePage() {
             fileName={currentExpense.file_name}
             fileUrl={currentExpense.file_url}
             ocrRawText={currentExpense.ocr_raw_text}
+            onDocumentLoaded={(info) => {
+              setDocPageInfo(info)
+            }}
           />
         </div>
 
@@ -489,6 +595,83 @@ export default function TriagePage() {
         <div className={`space-y-4 ${activeTabMobile === 'form' ? 'block' : 'hidden md:block'}`}>
           <Card className="border border-slate-200 bg-white shadow-sm">
             <CardContent className="p-5 sm:p-6 space-y-4">
+              {/* REGRA 1: Pergunta Automática para PDF > 1 página em destaque no topo */}
+              {isMultiPagePdf && !currentExpenseDecision && !multiReceiptActive && (
+                <div className="p-4 rounded-xl border-2 border-indigo-400 bg-indigo-50/90 text-indigo-950 space-y-3 shadow-xs">
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0 mt-0.5">
+                      <Files className="w-4 h-4" />
+                    </div>
+                    <div className="space-y-1">
+                      <h4 className="text-sm font-bold text-indigo-950">
+                        📄 Este arquivo possui {docPageInfo.totalPages} páginas
+                      </h4>
+                      <p className="text-xs text-indigo-800 leading-relaxed">
+                        Trata-se de um <strong>recibo único</strong> (com várias páginas de um mesmo
+                        documento) ou de <strong>múltiplos recibos</strong> que devem ser somados?
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setMultiPageDecision((prev) => ({
+                          ...prev,
+                          [currentExpense.id]: 'single',
+                        }))
+                        toast({
+                          title: 'Recibo Único confirmado',
+                          description:
+                            'Mantendo o valor único para todas as páginas deste documento.',
+                        })
+                      }}
+                      className="text-xs bg-white text-slate-700 hover:bg-slate-100 border-indigo-200 font-semibold flex-1"
+                    >
+                      Recibo Único (Manter valor único)
+                    </Button>
+
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => {
+                        setMultiPageDecision((prev) => ({
+                          ...prev,
+                          [currentExpense.id]: 'multiple',
+                        }))
+                        handleTriggerReprocessMultiple()
+                      }}
+                      className="text-xs bg-indigo-700 hover:bg-indigo-800 text-white font-semibold flex-1 gap-1.5 shadow-xs"
+                    >
+                      <Files className="w-3.5 h-3.5" />
+                      Múltiplos Recibos (Reprocessar e Somar)
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Progress bar when reprocessing */}
+              {reprocessing && (
+                <div className="p-3.5 rounded-xl border border-indigo-200 bg-indigo-50/70 space-y-2">
+                  <div className="flex items-center justify-between text-xs text-indigo-900 font-medium">
+                    <span className="flex items-center gap-1.5">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-600" />
+                      {reprocessingStatus || 'Processando páginas...'}
+                    </span>
+                    <span className="tabular-nums font-bold">{reprocessingProgress}%</span>
+                  </div>
+                  <div className="w-full h-1.5 bg-indigo-200/60 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-indigo-600 transition-all duration-300 rounded-full"
+                      style={{ width: `${reprocessingProgress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
               <div>
                 <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
                   <ShieldCheck className="w-4 h-4 text-blue-600" />
@@ -744,15 +927,45 @@ export default function TriagePage() {
                 </div>
               )}
 
-              {/* Valor Total (R$) */}
-              <div className="space-y-1.5">
-                <Label
-                  htmlFor="amount"
-                  className="text-xs font-semibold text-slate-700 flex items-center gap-1.5"
-                >
-                  <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
-                  Valor Total da Despesa (R$) *
-                </Label>
+              {/* Valor Total (R$) + REGRA 2: Botão Manual Sempre Disponível */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label
+                    htmlFor="amount"
+                    className="text-xs font-semibold text-slate-700 flex items-center gap-1.5"
+                  >
+                    <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                    Valor Total da Despesa (R$) *
+                  </Label>
+
+                  {/* REGRA 2: Botão / Switch Manual Sempre Disponível */}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={reprocessing}
+                    onClick={() => {
+                      if (!multiReceiptActive) {
+                        handleTriggerReprocessMultiple()
+                      } else {
+                        setMultiReceiptActive(false)
+                      }
+                    }}
+                    className={`h-7 px-2.5 text-xs font-semibold gap-1.5 transition-colors ${
+                      multiReceiptActive
+                        ? 'text-indigo-700 bg-indigo-50 border border-indigo-200'
+                        : 'text-slate-600 hover:text-indigo-700 hover:bg-indigo-50'
+                    }`}
+                  >
+                    <Files className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>
+                      {multiReceiptActive
+                        ? 'Ocultar Múltiplos Recibos'
+                        : 'Múltiplos Recibos no Arquivo (Extrair e Somar)'}
+                    </span>
+                  </Button>
+                </div>
+
                 <div className="relative">
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-400">
                     R$
@@ -769,6 +982,119 @@ export default function TriagePage() {
                   />
                 </div>
               </div>
+
+              {/* REGRA 3: Painel de Conferência das Parcelas Somadas */}
+              {multiReceiptActive && (
+                <div className="p-3.5 rounded-xl border border-indigo-200 bg-indigo-50/60 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <Files className="w-4 h-4 text-indigo-700" />
+                      <span className="text-xs font-bold text-indigo-950">
+                        Comprovantes Detectados ({multiReceiptItems.length})
+                      </span>
+                    </div>
+                    <span className="text-xs font-extrabold text-indigo-900 tabular-nums">
+                      Soma: {formatCurrencyBRL(multiReceiptCalculatedTotal)}
+                    </span>
+                  </div>
+
+                  <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                    {multiReceiptItems.map((item, idx) => (
+                      <div
+                        key={item.id || idx}
+                        className="flex items-center gap-2 bg-white p-2 rounded-lg border border-indigo-100 shadow-2xs"
+                      >
+                        <Input
+                          type="text"
+                          value={item.label}
+                          onChange={(e) => {
+                            const newItems = [...multiReceiptItems]
+                            newItems[idx] = { ...item, label: e.target.value }
+                            setMultiReceiptItems(newItems)
+                          }}
+                          placeholder="Ex: Página 1, Cupom 1"
+                          className="h-8 text-xs font-medium text-slate-700 w-1/2"
+                        />
+
+                        <div className="relative w-1/2">
+                          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[11px] font-bold text-slate-400">
+                            R$
+                          </span>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={item.amount === 0 ? '' : item.amount}
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value) || 0
+                              const newItems = [...multiReceiptItems]
+                              newItems[idx] = { ...item, amount: val }
+                              setMultiReceiptItems(newItems)
+                            }}
+                            placeholder="0.00"
+                            className="h-8 pl-7 text-xs font-bold text-slate-900 tabular-nums"
+                          />
+                        </div>
+
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            const newItems = multiReceiptItems.filter((_, i) => i !== idx)
+                            setMultiReceiptItems(newItems)
+                          }}
+                          className="h-8 w-8 p-0 text-slate-400 hover:text-rose-600 hover:bg-rose-50 shrink-0"
+                          title="Excluir comprovante"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-2 pt-1 border-t border-indigo-100">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const nextIndex = multiReceiptItems.length + 1
+                        setMultiReceiptItems([
+                          ...multiReceiptItems,
+                          {
+                            id: `custom-${Date.now()}`,
+                            label: `Recibo ${nextIndex}`,
+                            amount: 0,
+                          },
+                        ])
+                      }}
+                      className="h-8 text-xs text-indigo-700 border-indigo-200 hover:bg-indigo-100/50 gap-1 w-full sm:w-auto"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>+ Adicionar recibo manualmente</span>
+                    </Button>
+
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => {
+                        setAmountStr(multiReceiptCalculatedTotal.toFixed(2))
+                        toast({
+                          title: 'Soma total aplicada!',
+                          description: `Valor total atualizado para ${formatCurrencyBRL(multiReceiptCalculatedTotal)}.`,
+                        })
+                      }}
+                      className="h-8 text-xs bg-indigo-700 hover:bg-indigo-800 text-white font-semibold gap-1.5 w-full sm:w-auto"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>
+                        Aplicar Soma Total ({formatCurrencyBRL(multiReceiptCalculatedTotal)})
+                      </span>
+                    </Button>
+                  </div>
+                </div>
+              )}
 
               {/* Viagem Vinculada */}
               <div className="space-y-1.5 pt-1">

@@ -96,7 +96,13 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/hooks/use-toast'
 import { Switch } from '@/components/ui/switch'
-import { parseBrazilianReceiptText, processRealReceiptOcr } from '@/services/ocrService'
+import {
+  parseBrazilianReceiptText,
+  processRealReceiptOcr,
+  reprocessAndExtractMultipleReceipts,
+  MultiReceiptItem,
+} from '@/services/ocrService'
+import { Files, X as CloseIcon } from 'lucide-react'
 import { showExpenseDeletedUndoToast, showTripDeletedUndoToast } from '@/services/undoService'
 import { detectDuplicateExpense } from '@/services/duplicateDetectionService'
 import { useAuth } from '@/hooks/use-auth'
@@ -275,6 +281,13 @@ export default function TripDetailPage() {
   const [editExpCashStr, setEditExpCashStr] = useState('')
   const [editExpPointsStr, setEditExpPointsStr] = useState('')
   const [editExpMileRateStr, setEditExpMileRateStr] = useState('0.017')
+
+  // Multi-receipt state for Edit Expense Modal
+  const [editMultiReceiptActive, setEditMultiReceiptActive] = useState(false)
+  const [editMultiReceiptItems, setEditMultiReceiptItems] = useState<MultiReceiptItem[]>([])
+  const [editReprocessing, setEditReprocessing] = useState(false)
+  const [editReprocessProgress, setEditReprocessProgress] = useState(0)
+  const [editReprocessStatus, setEditReprocessStatus] = useState('')
 
   const loadTripData = async () => {
     if (!id) return
@@ -668,6 +681,10 @@ export default function TripDetailPage() {
     setEditExpCnpj(exp.cnpj || '')
     setEditExpTripId(exp.trip_id || trip?.id || '')
 
+    // Reset multi-receipt modal state
+    setEditMultiReceiptActive(false)
+    setEditMultiReceiptItems([])
+
     // Verificar se há pontos no ocr_raw_text
     const parsed =
       exp.ocr_raw_text &&
@@ -690,6 +707,57 @@ export default function TripDetailPage() {
 
     loadAvailableTrips()
   }
+
+  const handleTriggerEditReprocessMultiple = async () => {
+    if (!editingExpense) return
+    setEditReprocessing(true)
+    setEditReprocessProgress(10)
+    setEditReprocessStatus('Iniciando análise de múltiplos comprovantes...')
+    setEditMultiReceiptActive(true)
+
+    try {
+      const res = await reprocessAndExtractMultipleReceipts(
+        editingExpense.file_url,
+        editingExpense.file_name,
+        editingExpense.ocr_raw_text,
+        (progress, status) => {
+          setEditReprocessProgress(progress)
+          setEditReprocessStatus(status)
+        },
+      )
+
+      setEditMultiReceiptItems(res.items)
+      if (res.totalSum > 0) {
+        setEditExpAmount(res.totalSum.toFixed(2))
+      }
+
+      toast({
+        title: 'Múltiplos recibos detectados!',
+        description: `${res.items.length} comprovante(s) identificados com soma de ${formatCurrencyBRL(res.totalSum)}.`,
+      })
+    } catch (err: any) {
+      console.warn('Erro ao reprocessar no modal de edição:', err)
+      toast({
+        title: 'Atenção ao reprocessar',
+        description:
+          err?.message ||
+          'Não foi possível extrair automaticamente todos os recibos. Você pode adicioná-los manualmente.',
+        variant: 'destructive',
+      })
+      setEditMultiReceiptItems([
+        { id: 'p1', label: 'Item 1', amount: parseFloat(editExpAmount) || 0 },
+        { id: 'p2', label: 'Item 2', amount: 0 },
+      ])
+    } finally {
+      setEditReprocessing(false)
+    }
+  }
+
+  const editMultiReceiptCalculatedTotal = React.useMemo(() => {
+    return Number(
+      editMultiReceiptItems.reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0).toFixed(2),
+    )
+  }, [editMultiReceiptItems])
 
   const handleSaveExpenseEdits = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -2968,7 +3036,29 @@ export default function TripDetailPage() {
               </div>
 
               <div className="space-y-1">
-                <Label className="text-xs font-semibold text-slate-700">Valor (R$) *</Label>
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-semibold text-slate-700">Valor (R$) *</Label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={isUpdatingExpense || editReprocessing}
+                    onClick={() => {
+                      if (!editMultiReceiptActive) {
+                        handleTriggerEditReprocessMultiple()
+                      } else {
+                        setEditMultiReceiptActive(false)
+                      }
+                    }}
+                    className="h-5 px-1 text-[10px] text-indigo-700 hover:bg-indigo-50 font-semibold gap-1"
+                    title="Reprocessar e somar múltiplos recibos contidos no mesmo arquivo"
+                  >
+                    <Files className="w-3 h-3 text-indigo-600" />
+                    <span>
+                      {editMultiReceiptActive ? 'Ocultar Múltiplos' : 'Múltiplos Recibos'}
+                    </span>
+                  </Button>
+                </div>
                 <Input
                   type="number"
                   step="0.01"
@@ -2976,11 +3066,140 @@ export default function TripDetailPage() {
                   value={editExpAmount}
                   onChange={(e) => setEditExpAmount(e.target.value)}
                   required
-                  className="text-xs tabular-nums"
+                  className="text-xs tabular-nums font-bold"
                   disabled={isUpdatingExpense}
                 />
               </div>
             </div>
+
+            {/* Reprocess progress indicator */}
+            {editReprocessing && (
+              <div className="p-2.5 rounded-lg border border-indigo-200 bg-indigo-50/70 space-y-1.5">
+                <div className="flex items-center justify-between text-[11px] text-indigo-900 font-medium">
+                  <span className="flex items-center gap-1.5">
+                    <Loader2 className="w-3 h-3 animate-spin text-indigo-600" />
+                    {editReprocessStatus || 'Processando páginas...'}
+                  </span>
+                  <span className="tabular-nums font-bold">{editReprocessProgress}%</span>
+                </div>
+                <div className="w-full h-1 bg-indigo-200/60 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-indigo-600 transition-all duration-300 rounded-full"
+                    style={{ width: `${editReprocessProgress}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Painel de Múltiplos Recibos na Edição */}
+            {editMultiReceiptActive && (
+              <div className="p-3 rounded-xl border border-indigo-200 bg-indigo-50/60 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Files className="w-3.5 h-3.5 text-indigo-700" />
+                    <span className="text-[11px] font-bold text-indigo-950">
+                      Múltiplos Recibos ({editMultiReceiptItems.length})
+                    </span>
+                  </div>
+                  <span className="text-xs font-extrabold text-indigo-900 tabular-nums">
+                    Total: {formatCurrencyBRL(editMultiReceiptCalculatedTotal)}
+                  </span>
+                </div>
+
+                <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+                  {editMultiReceiptItems.map((item, idx) => (
+                    <div
+                      key={item.id || idx}
+                      className="flex items-center gap-1.5 bg-white p-1.5 rounded-lg border border-indigo-100 shadow-2xs"
+                    >
+                      <Input
+                        type="text"
+                        value={item.label}
+                        onChange={(e) => {
+                          const newItems = [...editMultiReceiptItems]
+                          newItems[idx] = { ...item, label: e.target.value }
+                          setEditMultiReceiptItems(newItems)
+                        }}
+                        placeholder="Ex: Página 1"
+                        className="h-7 text-xs font-medium text-slate-700 w-1/2"
+                      />
+
+                      <div className="relative w-1/2">
+                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400">
+                          R$
+                        </span>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={item.amount === 0 ? '' : item.amount}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0
+                            const newItems = [...editMultiReceiptItems]
+                            newItems[idx] = { ...item, amount: val }
+                            setEditMultiReceiptItems(newItems)
+                          }}
+                          placeholder="0.00"
+                          className="h-7 pl-6 text-xs font-bold text-slate-900 tabular-nums"
+                        />
+                      </div>
+
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          const newItems = editMultiReceiptItems.filter((_, i) => i !== idx)
+                          setEditMultiReceiptItems(newItems)
+                        }}
+                        className="h-7 w-7 p-0 text-slate-400 hover:text-rose-600 hover:bg-rose-50 shrink-0"
+                      >
+                        <CloseIcon className="w-3 h-3" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex items-center justify-between gap-1.5 pt-1 border-t border-indigo-100">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      const nextIndex = editMultiReceiptItems.length + 1
+                      setEditMultiReceiptItems([
+                        ...editMultiReceiptItems,
+                        {
+                          id: `custom-${Date.now()}`,
+                          label: `Recibo ${nextIndex}`,
+                          amount: 0,
+                        },
+                      ])
+                    }}
+                    className="h-7 text-[11px] text-indigo-700 border-indigo-200 hover:bg-indigo-100/50 gap-1 px-2"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>+ Adicionar linha</span>
+                  </Button>
+
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => {
+                      setEditExpAmount(editMultiReceiptCalculatedTotal.toFixed(2))
+                      toast({
+                        title: 'Soma total aplicada!',
+                        description: `Valor total atualizado para ${formatCurrencyBRL(editMultiReceiptCalculatedTotal)}.`,
+                      })
+                    }}
+                    className="h-7 text-[11px] bg-indigo-700 hover:bg-indigo-800 text-white font-semibold gap-1 px-2.5"
+                  >
+                    <Check className="w-3 h-3" />
+                    <span>Aplicar Soma ({formatCurrencyBRL(editMultiReceiptCalculatedTotal)})</span>
+                  </Button>
+                </div>
+              </div>
+            )}
 
             <div className="space-y-1">
               <Label className="text-xs font-semibold text-slate-700">Categoria *</Label>

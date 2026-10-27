@@ -27,12 +27,14 @@ interface DocumentViewerProps {
   fileName: string
   fileUrl: string
   ocrRawText?: string | null
+  onDocumentLoaded?: (info: { isPdf: boolean; totalPages: number }) => void
 }
 
 export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   fileName,
   fileUrl,
   ocrRawText,
+  onDocumentLoaded,
 }) => {
   // Navigation & Zoom & Rotation state
   const [zoom, setZoom] = useState(100)
@@ -81,6 +83,9 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
         setIsPdf(res.isPdf)
         setIsImage(res.isImage)
         setResolving(false)
+        if (!res.isPdf && res.url) {
+          onDocumentLoaded?.({ isPdf: false, totalPages: 1 })
+        }
       })
       .catch((err) => {
         if (!active) return
@@ -92,7 +97,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
     return () => {
       active = false
     }
-  }, [fileUrl, fileName])
+  }, [fileUrl, fileName, onDocumentLoaded])
 
   // Load PDF when resolved URL is identified as PDF
   useEffect(() => {
@@ -118,6 +123,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
         setPdfDoc(doc)
         setTotalPages(doc.numPages)
         setPdfLoading(false)
+        onDocumentLoaded?.({ isPdf: true, totalPages: doc.numPages })
       })
       .catch((err) => {
         if (!active) return
@@ -130,7 +136,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
       active = false
       loadingTask.destroy()
     }
-  }, [resolvedUrl, isPdf])
+  }, [resolvedUrl, isPdf, onDocumentLoaded])
 
   // Render current PDF page on canvas
   const renderPdfPage = useCallback(async () => {

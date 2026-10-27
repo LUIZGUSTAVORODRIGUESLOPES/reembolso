@@ -1,6 +1,7 @@
 import { ExpenseCategory } from '@/types/database'
 import * as pdfjsLib from 'pdfjs-dist'
 import { createWorker, Worker } from 'tesseract.js'
+import { resolveReceiptUrl } from '@/services/receiptFileResolver'
 
 // Configure PDF.js worker
 if (typeof window !== 'undefined') {
@@ -927,7 +928,10 @@ export function parseBrazilianReceiptText(rawText: string): ParsedReceiptFields 
 // =============================================================================
 
 /**
- * Extrai texto embutido de PDFs nativos e renderiza a 1ª página em canvas
+ * Extrai texto de PDFs nativos ou escaneados (lê até 10 páginas).
+ * Se alguma página i não tiver texto nativo suficiente (< 20 caracteres),
+ * renderiza o canvas daquela página, aplica preprocessReceiptImage e roda runOcrOnImage,
+ * salvando o texto com separadores claros --- [PÁGINA i] ---.
  */
 async function extractFromPdf(
   file: File,
@@ -938,21 +942,32 @@ async function extractFromPdf(
   const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer })
   const pdf = await loadingTask.promise
 
-  const totalPages = Math.min(pdf.numPages, 3) // Lê até 3 páginas
-  let allText = ''
+  const totalPages = Math.min(pdf.numPages, 10) // Lê até 10 páginas
+  const pageSections: string[] = []
   let firstPageCanvasDataUrl = ''
+  let anyNativeText = false
 
   for (let i = 1; i <= totalPages; i++) {
-    onProgress?.(25 + Math.round((i / totalPages) * 25), `Lendo página ${i} de ${pdf.numPages}...`)
+    onProgress?.(
+      20 + Math.round((i / totalPages) * 35),
+      `Processando página ${i} de ${pdf.numPages}...`,
+    )
     const page = await pdf.getPage(i)
 
-    // Extrai texto nativo da camada do PDF
+    // 1. Extrai texto nativo da camada vetorial do PDF
     const textContent = await page.getTextContent()
-    const pageText = textContent.items.map((item: any) => ('str' in item ? item.str : '')).join(' ')
-    allText += ' ' + pageText
+    const nativeText = textContent.items
+      .map((item: any) => ('str' in item ? item.str : ''))
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
 
-    // Renderiza a primeira página no canvas para preview e OCR de fallback se escaneado
-    if (i === 1) {
+    let pageText = nativeText
+
+    // Renderiza a primeira página no canvas para preview (se ainda não renderizada)
+    let pageCanvasDataUrl = ''
+    const needsRender = i === 1 || nativeText.length < 20
+    if (needsRender) {
       const viewport = page.getViewport({ scale: 1.5 })
       const canvas = document.createElement('canvas')
       canvas.width = viewport.width
@@ -964,13 +979,42 @@ async function extractFromPdf(
           canvasContext: context,
           viewport,
         }).promise
-        firstPageCanvasDataUrl = canvas.toDataURL('image/jpeg', 0.85)
+        pageCanvasDataUrl = canvas.toDataURL('image/jpeg', 0.85)
+        if (i === 1) {
+          firstPageCanvasDataUrl = pageCanvasDataUrl
+        }
       }
+    }
+
+    if (nativeText.length >= 20) {
+      anyNativeText = true
+    } else if (pageCanvasDataUrl) {
+      // Página sem texto nativo suficiente (< 20 caracteres): OCR de fallback
+      try {
+        const preprocessed = await preprocessReceiptImage(pageCanvasDataUrl, {
+          contrast: 1.45,
+        })
+        const ocrText = await runOcrOnImage(preprocessed, (pct, status) => {
+          onProgress?.(
+            Math.round(20 + ((i - 1 + pct / 100) / totalPages) * 35),
+            `OCR na pág. ${i}: ${status}`,
+          )
+        })
+        if (ocrText && ocrText.trim().length > 0) {
+          pageText = ocrText.trim()
+        }
+      } catch (ocrErr) {
+        console.warn(`Falha no OCR da página ${i} do PDF:`, ocrErr)
+      }
+    }
+
+    if (pageText.length > 0) {
+      pageSections.push(`--- [PÁGINA ${i}] ---\n${pageText}`)
     }
   }
 
-  const cleanText = allText.replace(/\s+/g, ' ').trim()
-  const hasEmbeddedText = cleanText.length > 25
+  const cleanText = pageSections.join('\n\n').trim()
+  const hasEmbeddedText = anyNativeText || cleanText.length > 25
 
   return {
     rawText: cleanText,
@@ -1087,5 +1131,203 @@ export async function processRealReceiptOcr(
     extraction_method: extractionMethod,
     confidence_score,
     recognized_fields,
+  }
+}
+
+// =============================================================================
+// 6. REPROCESSAMENTO MULTI-RECIBO (PDF multi-página ou imagem com múltiplos cupons)
+// =============================================================================
+
+export interface MultiReceiptItem {
+  id: string
+  label: string
+  amount: number
+}
+
+export interface MultiReceiptResult {
+  items: MultiReceiptItem[]
+  totalSum: number
+  updatedRawText: string
+}
+
+/**
+ * Reprocessa o arquivo (PDF de várias páginas ou foto de 1 folha com múltiplos cupons)
+ * para identificar e somar valores de comprovantes distintos.
+ */
+export async function reprocessAndExtractMultipleReceipts(
+  fileUrl: string,
+  fileName: string,
+  existingRawText?: string | null,
+  onProgress?: (progress: number, status: string) => void,
+): Promise<MultiReceiptResult> {
+  onProgress?.(5, 'Localizando arquivo original...')
+  const resolved = await resolveReceiptUrl(fileUrl, fileName)
+  const targetUrl = resolved.url || fileUrl
+
+  if (!targetUrl) {
+    throw new Error('Não foi possível resolver a URL do arquivo no armazenamento.')
+  }
+
+  const isPdf = resolved.isPdf || /\.pdf(\?.*)?$/i.test(targetUrl) || /\.pdf$/i.test(fileName)
+
+  // ---------------------------------------------------------------------------
+  // CASO A: Documento PDF
+  // ---------------------------------------------------------------------------
+  if (isPdf) {
+    onProgress?.(15, 'Carregando documento PDF...')
+    const loadingTask = pdfjsLib.getDocument({
+      url: targetUrl,
+      cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
+      cMapPacked: true,
+    })
+    const pdf = await loadingTask.promise
+    const totalPages = Math.min(pdf.numPages, 10)
+
+    const items: MultiReceiptItem[] = []
+    const pageTexts: string[] = []
+
+    for (let i = 1; i <= totalPages; i++) {
+      onProgress?.(
+        20 + Math.round((i / totalPages) * 70),
+        `Processando página ${i} de ${pdf.numPages}...`,
+      )
+      const page = await pdf.getPage(i)
+
+      // Extrai texto vetorial nativo
+      const textContent = await page.getTextContent()
+      const nativeText = textContent.items
+        .map((item: any) => ('str' in item ? item.str : ''))
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+
+      let pageRaw = nativeText
+
+      // Se não tiver texto suficiente nativo, renderiza e roda OCR
+      if (nativeText.length < 20) {
+        try {
+          const viewport = page.getViewport({ scale: 1.5 })
+          const canvas = document.createElement('canvas')
+          canvas.width = viewport.width
+          canvas.height = viewport.height
+          const ctx = canvas.getContext('2d')
+          if (ctx) {
+            await page.render({ canvasContext: ctx, viewport }).promise
+            const canvasDataUrl = canvas.toDataURL('image/jpeg', 0.85)
+            const preprocessed = await preprocessReceiptImage(canvasDataUrl, { contrast: 1.45 })
+            const ocrText = await runOcrOnImage(preprocessed)
+            if (ocrText && ocrText.trim().length > 0) {
+              pageRaw = ocrText.trim()
+            }
+          }
+        } catch (ocrErr) {
+          console.warn(`Falha no OCR da pág. ${i}:`, ocrErr)
+        }
+      }
+
+      pageTexts.push(`--- [PÁGINA ${i}] ---\n${pageRaw}`)
+
+      // Extrai valor inteligente específico desta página
+      const pageAmount = extractIntelligentAmount(pageRaw)
+      if (pageAmount !== null && pageAmount > 0) {
+        items.push({
+          id: `p${i}`,
+          label: `Página ${i}`,
+          amount: Number(pageAmount.toFixed(2)),
+        })
+      }
+    }
+
+    // Se nenhuma página retornou valor mas temos totalPages, cria itens com 0 para o usuário preencher
+    if (items.length === 0) {
+      for (let i = 1; i <= totalPages; i++) {
+        items.push({
+          id: `p${i}`,
+          label: `Página ${i}`,
+          amount: 0,
+        })
+      }
+    }
+
+    const totalSum = Number(items.reduce((acc, curr) => acc + (curr.amount || 0), 0).toFixed(2))
+    const updatedRawText = pageTexts.join('\n\n')
+
+    onProgress?.(100, 'Processamento de páginas concluído!')
+    return {
+      items,
+      totalSum,
+      updatedRawText,
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // CASO B: Imagem Única (1 página com múltiplos cupons fotografados)
+  // ---------------------------------------------------------------------------
+  onProgress?.(20, 'Analisando imagem e extraindo valores distintos...')
+  let rawText = existingRawText || ''
+
+  // Se o texto existente for muito curto ou genérico, executa OCR na imagem
+  if (!rawText || rawText.length < 20 || rawText.includes('Nenhum texto legível')) {
+    try {
+      const preprocessed = await preprocessReceiptImage(targetUrl, { contrast: 1.45 })
+      rawText = await runOcrOnImage(preprocessed, (pct, status) => {
+        onProgress?.(25 + Math.round((pct / 100) * 60), status)
+      })
+    } catch (err) {
+      console.warn('Falha ao rodar OCR na imagem para múltiplos cupons:', err)
+      rawText = existingRawText || ''
+    }
+  }
+
+  // Extrai todos os valores monetários candidatos distintos do texto
+  const norm = (rawText || '').replace(/\r/g, ' ')
+  const amountPattern =
+    /(?:R\$\s*)?(\d{1,3}(?:\.\d{3})*|\d+)[,.]([0-9]{2})(?!\d|\/|-)(?:\s*(?:reais|brl))?/gi
+
+  const distinctValues: number[] = []
+  let match: RegExpExecArray | null
+  while ((match = amountPattern.exec(norm)) !== null) {
+    const integerPart = match[1].replace(/\./g, '')
+    const decimalPart = match[2]
+    const numericValue = parseFloat(`${integerPart}.${decimalPart}`)
+
+    if (isNaN(numericValue) || numericValue <= 0 || numericValue > 15000 || numericValue < 0.5) {
+      continue
+    }
+
+    const rounded = Number(numericValue.toFixed(2))
+    // Evita duplicatas idênticas imediatas vindas da mesma linha se já adicionado
+    if (!distinctValues.includes(rounded)) {
+      distinctValues.push(rounded)
+    }
+  }
+
+  const items: MultiReceiptItem[] =
+    distinctValues.length > 0
+      ? distinctValues.slice(0, 10).map((val, idx) => ({
+          id: `item-${idx + 1}`,
+          label: `Cupom ${idx + 1}`,
+          amount: val,
+        }))
+      : [
+          {
+            id: 'item-1',
+            label: 'Cupom 1',
+            amount: extractIntelligentAmount(rawText) || 0,
+          },
+          {
+            id: 'item-2',
+            label: 'Cupom 2',
+            amount: 0,
+          },
+        ]
+
+  const totalSum = Number(items.reduce((acc, curr) => acc + (curr.amount || 0), 0).toFixed(2))
+  onProgress?.(100, 'Valores extraídos!')
+
+  return {
+    items,
+    totalSum,
+    updatedRawText: rawText,
   }
 }

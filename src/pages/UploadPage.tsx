@@ -350,13 +350,30 @@ export default function UploadPage() {
       })
 
       for (const item of finishedItems) {
-        let uploadedFileUrl = item.extracted?.preview_data_url || ''
+        let uploadedFileUrl = ''
 
-        // Upload actual original file to Supabase Storage bucket 'comprovantes'
-        try {
-          uploadedFileUrl = await storageService.uploadReceiptFile(item.file)
-        } catch (uploadErr) {
-          console.warn('Storage upload error, using preview data url:', uploadErr)
+        // Upload original file to Supabase Storage with 1 automatic retry
+        let uploadSuccess = false
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          try {
+            uploadedFileUrl = await storageService.uploadReceiptFile(item.file)
+            uploadSuccess = true
+            break
+          } catch (uploadErr) {
+            console.warn(`Tentativa ${attempt} de upload do comprovante falhou:`, uploadErr)
+            if (attempt === 1) {
+              await new Promise((resolve) => setTimeout(resolve, 800))
+            }
+          }
+        }
+
+        if (!uploadSuccess || !uploadedFileUrl) {
+          toast({
+            title: 'Erro de conexão no envio',
+            description: `Falha ao enviar o arquivo "${item.file.name}" para o armazenamento seguro. O registro NÃO foi salvo para evitar arquivo corrompido. Verifique sua conexão e clique em Salvar novamente.`,
+            variant: 'destructive',
+          })
+          return
         }
 
         let finalTripId = item.assignedTripId

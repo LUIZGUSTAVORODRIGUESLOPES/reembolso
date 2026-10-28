@@ -414,6 +414,7 @@ const CATEGORY_DICTIONARIES: Record<ExpenseCategory, CategoryKeywordRule[]> = {
 export function classifyExpenseCategoryByScoring(
   text: string,
   merchantHint?: string | null,
+  fileName?: string | null,
 ): { category: ExpenseCategory; scores: Record<ExpenseCategory, number> } {
   const normText = normalizeOcrText(text)
   const normMerchant = merchantHint ? normalizeOcrText(merchantHint) : ''
@@ -443,6 +444,75 @@ export function classifyExpenseCategoryByScoring(
     normMerchant.includes('locadora')
   ) {
     scores.transporte += 80
+  }
+
+  // Bônus expressivo por palavras-chave presentes no nome do arquivo (fileName)
+  // Ex: "20261028-0819 alimentação.pdf" indica claramente Alimentação mesmo que a razão social seja "Hotelaria"
+  if (fileName) {
+    const normFileName = normalizeOcrText(fileName)
+    if (
+      normFileName.includes('alimentacao') ||
+      normFileName.includes('almoco') ||
+      normFileName.includes('jantar') ||
+      normFileName.includes('refeicao') ||
+      normFileName.includes('restaurante') ||
+      normFileName.includes('lanche')
+    ) {
+      scores.alimentacao += 100
+    }
+    if (
+      normFileName.includes('pedagio') ||
+      normFileName.includes('tarifa') ||
+      normFileName.includes('semparar') ||
+      normFileName.includes('sem parar') ||
+      normFileName.includes('conectcar')
+    ) {
+      scores.pedagio += 100
+    }
+    if (
+      normFileName.includes('combustivel') ||
+      normFileName.includes('gasolina') ||
+      normFileName.includes('etanol') ||
+      normFileName.includes('diesel') ||
+      normFileName.includes('abastecimento') ||
+      normFileName.includes('posto')
+    ) {
+      scores.combustivel += 100
+    }
+    if (
+      normFileName.includes('estacionamento') ||
+      normFileName.includes('garagem') ||
+      normFileName.includes('valet') ||
+      normFileName.includes('estapar')
+    ) {
+      scores.estacionamento += 100
+    }
+    if (
+      normFileName.includes('uber') ||
+      normFileName.includes('99') ||
+      normFileName.includes('taxi') ||
+      normFileName.includes('cabify')
+    ) {
+      scores.uber_taxi += 100
+    }
+    if (
+      normFileName.includes('hospedagem') ||
+      normFileName.includes('hotel') ||
+      normFileName.includes('pousada') ||
+      normFileName.includes('diaria') ||
+      normFileName.includes('reserva')
+    ) {
+      scores.hospedagem += 100
+    }
+    if (
+      normFileName.includes('transporte') ||
+      normFileName.includes('locacao') ||
+      normFileName.includes('aereo') ||
+      normFileName.includes('passagem') ||
+      normFileName.includes('voo')
+    ) {
+      scores.transporte += 100
+    }
   }
 
   for (const [catKey, rules] of Object.entries(CATEGORY_DICTIONARIES) as [
@@ -577,7 +647,16 @@ export function extractIntelligentAmount(
     // Ignora valores residuais minúsculos como 0.01 ou 0.05 a menos que seja o único
     if (numericValue < 0.5) continue
 
+    // Rejeita valores que representam números de página isolados (ex: "PÁGINA 1" ou "PAG 2")
     const matchIndex = match.index
+    const preCheckSnippet = norm.slice(Math.max(0, matchIndex - 15), matchIndex).toLowerCase()
+    if (
+      preCheckSnippet.includes('pag') ||
+      preCheckSnippet.includes('página') ||
+      preCheckSnippet.includes('pagina')
+    ) {
+      continue
+    }
 
     // Contexto de -40 a +40 caracteres para detectar palavras-chave "total", "pago", "R$"
     const snippetStart = Math.max(0, matchIndex - 40)
@@ -733,7 +812,10 @@ const KNOWN_MERCHANT_SIGNATURES: Array<{
  * Structured Brazilian receipt parser: extrai CNPJ, datas, horário, valor inteligente e categoria
  * via regras NLP leves e dicionários ponderados.
  */
-export function parseBrazilianReceiptText(rawText: string): ParsedReceiptFields {
+export function parseBrazilianReceiptText(
+  rawText: string,
+  fileName?: string | null,
+): ParsedReceiptFields {
   const normalizedText = (rawText || '').replace(/\r/g, ' ')
   const lowerText = normalizeOcrText(normalizedText)
 
@@ -820,9 +902,21 @@ export function parseBrazilianReceiptText(rawText: string): ParsedReceiptFields 
       .map((l) => l.trim())
       .filter((l) => l.length > 3)
 
-    for (let i = 0; i < Math.min(lines.length, 6); i++) {
+    for (let i = 0; i < Math.min(lines.length, 12); i++) {
       const line = lines[i]
       const lineLow = normalizeOcrText(line)
+
+      // Ignora marcadores de página (ex: "--- [PÁGINA 1] ---") ou linhas iniciadas por "---" ou "["
+      if (
+        lineLow.includes('--- [pagina') ||
+        lineLow.includes('[pagina') ||
+        lineLow.includes('pagina') ||
+        line.startsWith('---') ||
+        line.startsWith('[') ||
+        line.includes('PÁGINA')
+      ) {
+        continue
+      }
 
       // Pula cabeçalhos genéricos
       if (
@@ -869,7 +963,7 @@ export function parseBrazilianReceiptText(rawText: string): ParsedReceiptFields 
   }
 
   // 5. Categorização Semântica por Pontuação (Scoring System)
-  const classification = classifyExpenseCategoryByScoring(rawText, merchant_name)
+  const classification = classifyExpenseCategoryByScoring(rawText, merchant_name, fileName)
   let category = classification.category
 
   // Se alguma assinatura de merchant conhecida definiu categoria explícita, respeita
@@ -1100,7 +1194,7 @@ export async function processRealReceiptOcr(
   onProgress?.(90, 'Estruturando campos fiscais (CNPJ, data, valor inteligente)...')
 
   // Parser robusto com pontuação semântica e caçador inteligente de valores
-  const parsed = parseBrazilianReceiptText(rawText)
+  const parsed = parseBrazilianReceiptText(rawText, file.name)
 
   const recognized_fields = {
     amount: parsed.amount !== null,

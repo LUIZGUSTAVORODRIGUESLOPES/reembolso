@@ -184,7 +184,7 @@ export default function TriagePage() {
       currentExpense.ocr_raw_text &&
       currentExpense.ocr_raw_text !== 'Arquivo sem texto extraído' &&
       currentExpense.ocr_raw_text !== 'Nenhum texto legível detectado.'
-        ? parseBrazilianReceiptText(currentExpense.ocr_raw_text)
+        ? parseBrazilianReceiptText(currentExpense.ocr_raw_text, currentExpense.file_name)
         : null
 
     // Determine issue_date: prefer stored date unless it matches upload fallback (e.g. today) and fallback has better date
@@ -311,7 +311,16 @@ export default function TriagePage() {
 
   // Check if save is blocked by unconfirmed multi-page prompt
   const currentExpenseDecision = currentExpense ? multiPageDecision[currentExpense.id] : null
-  const isMultiPagePdf = docPageInfo.isPdf && docPageInfo.totalPages > 1
+  const hasPage2InOcr = Boolean(
+    currentExpense?.ocr_raw_text &&
+    (currentExpense.ocr_raw_text.includes('--- [PÁGINA 2] ---') ||
+      currentExpense.ocr_raw_text.includes('--- [PAGINA 2] ---') ||
+      currentExpense.ocr_raw_text.includes('[PÁGINA 2]') ||
+      currentExpense.ocr_raw_text.includes('[PAGINA 2]')),
+  )
+  const isMultiPagePdf = (docPageInfo.isPdf && docPageInfo.totalPages > 1) || hasPage2InOcr
+  const effectiveTotalPages =
+    docPageInfo.totalPages > 1 ? docPageInfo.totalPages : hasPage2InOcr ? 2 : 1
   const isMultiPagePendingDecision =
     isMultiPagePdf && !currentExpenseDecision && !multiReceiptActive
 
@@ -338,7 +347,7 @@ export default function TriagePage() {
     if (isMultiPagePendingDecision) {
       toast({
         title: 'Confirmação necessária',
-        description: `Este arquivo possui ${docPageInfo.totalPages} páginas. Escolha se deseja manter como recibo único ou somar múltiplos recibos antes de salvar.`,
+        description: `Este arquivo possui ${effectiveTotalPages} páginas. Escolha se deseja manter como recibo único ou somar múltiplos recibos antes de salvar.`,
         variant: 'destructive',
       })
       return
@@ -604,7 +613,7 @@ export default function TriagePage() {
                     </div>
                     <div className="space-y-1">
                       <h4 className="text-sm font-bold text-indigo-950">
-                        📄 Este arquivo possui {docPageInfo.totalPages} páginas
+                        📄 Este arquivo possui {effectiveTotalPages} páginas
                       </h4>
                       <p className="text-xs text-indigo-800 leading-relaxed">
                         Trata-se de um <strong>recibo único</strong> (com várias páginas de um mesmo

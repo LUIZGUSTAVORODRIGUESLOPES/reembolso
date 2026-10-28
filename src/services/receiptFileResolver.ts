@@ -56,17 +56,26 @@ export async function resolveReceiptUrl(
   const trimmedUrl = fileUrl?.trim() || ''
   const trimmedName = fileName?.trim() || ''
 
-  // Determine file type from extension
+  // Determine file type
+  // REGRA CRÍTICA: se a URL for "data:image/...", ela é explicitamente uma imagem, NUNCA um PDF
+  const isExplicitDataImage = trimmedUrl.startsWith('data:image/')
+
   const testTarget =
     (trimmedUrl.startsWith('http') || !trimmedUrl.includes('base64')) && trimmedUrl
       ? trimmedUrl
       : trimmedName
 
-  const isPdf = /\.pdf(\?.*)?$/i.test(testTarget) || /\.pdf$/i.test(trimmedName)
-  const isImage =
+  let isPdf =
+    !isExplicitDataImage && (/\.pdf(\?.*)?$/i.test(testTarget) || /\.pdf$/i.test(trimmedName))
+  let isImage =
+    isExplicitDataImage ||
     /\.(jpe?g|png|webp|gif|bmp|svg)(\?.*)?$/i.test(testTarget) ||
-    /\.(jpe?g|png|webp|gif|bmp|svg)$/i.test(trimmedName) ||
-    trimmedUrl.startsWith('data:image/')
+    /\.(jpe?g|png|webp|gif|bmp|svg)$/i.test(trimmedName)
+
+  if (isExplicitDataImage) {
+    isPdf = false
+    isImage = true
+  }
 
   // 1. If we already have a valid data: or blob: URL
   if (trimmedUrl.startsWith('data:') || trimmedUrl.startsWith('blob:')) {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Trash2,
@@ -99,6 +99,16 @@ export default function TriagePage() {
     isPdf: false,
     totalPages: 1,
   })
+
+  // Estabiliza o callback para o DocumentViewer não reexecutar useEffect a cada render da página
+  const handleDocumentLoaded = useCallback((info: { isPdf: boolean; totalPages: number }) => {
+    setDocPageInfo((prev) => {
+      if (prev.isPdf === info.isPdf && prev.totalPages === info.totalPages) {
+        return prev
+      }
+      return info
+    })
+  }, [])
   // Track decision per expense ID: 'single' | 'multiple' | null
   const [multiPageDecision, setMultiPageDecision] = useState<Record<string, 'single' | 'multiple'>>(
     {},
@@ -321,7 +331,7 @@ export default function TriagePage() {
   }
 
   // Multi-receipt helper: calculate current total
-  const multiReceiptCalculatedTotal = React.useMemo(() => {
+  const multiReceiptCalculatedTotal = useMemo(() => {
     return Number(
       multiReceiptItems.reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0).toFixed(2),
     )
@@ -344,7 +354,7 @@ export default function TriagePage() {
 
   // Duplicate match details if flagged
   const isDuplicate = currentExpense?.audit_flags?.includes('comprovante_duplicado') || false
-  const duplicateReference = React.useMemo(() => {
+  const duplicateReference = useMemo(() => {
     if (!currentExpense || !isDuplicate) return null
     // Procura na lista de despesas carregadas aquela que deu match
     const otherExpenses = expenses.filter((e) => e.id !== currentExpense.id)
@@ -451,16 +461,29 @@ export default function TriagePage() {
     const deletedExp = { ...currentExpense }
     setIsDeleting(true)
     try {
-      // Exclui sem apagar o arquivo do Storage imediatamente para permitir Desfazer
-      await storageService.deleteExpense(deletedExp.id, false)
+      // Fecha o diálogo de confirmação imediatamente para liberar a UI
       setDeleteDialogOpen(false)
 
+      // Atualiza o estado local imediatamente, avançando para o próximo item
       const remaining = expenses.filter((e) => e.id !== deletedExp.id)
       setExpenses(remaining)
-      if (currentIndex >= remaining.length && remaining.length > 0) {
-        setCurrentIndex(remaining.length - 1)
-      } else if (remaining.length === 0) {
+
+      if (remaining.length === 0) {
         navigate('/')
+      } else if (currentIndex >= remaining.length) {
+        setCurrentIndex(Math.max(0, remaining.length - 1))
+      }
+
+      // Chama o serviço de exclusão (não depende do preview nem bloqueia o avanço da UI)
+      try {
+        await storageService.deleteExpense(deletedExp.id, false)
+      } catch (err: any) {
+        console.warn('Erro ao excluir no banco/storage:', err)
+        toast({
+          title: 'Aviso ao excluir',
+          description: storageService.formatDatabaseError(err) || 'Item removido da visualização.',
+          variant: 'destructive',
+        })
       }
 
       showExpenseDeletedUndoToast({
@@ -472,10 +495,11 @@ export default function TriagePage() {
           }
         },
       })
-    } catch (err: any) {
+    } catch (unexpectedErr: any) {
+      console.error('Erro inesperado no fluxo de exclusão:', unexpectedErr)
       toast({
-        title: 'Exclusão bloqueada',
-        description: storageService.formatDatabaseError(err),
+        title: 'Erro ao excluir',
+        description: 'Ocorreu um erro ao processar a exclusão.',
         variant: 'destructive',
       })
     } finally {
@@ -612,9 +636,7 @@ export default function TriagePage() {
             fileName={currentExpense.file_name}
             fileUrl={currentExpense.file_url}
             ocrRawText={currentExpense.ocr_raw_text}
-            onDocumentLoaded={(info) => {
-              setDocPageInfo(info)
-            }}
+            onDocumentLoaded={handleDocumentLoaded}
           />
         </div>
 

@@ -60,6 +60,10 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const renderTaskRef = useRef<any>(null)
 
+  // Image loading state & timeout
+  const [imgLoading, setImgLoading] = useState(false)
+  const [retryKey, setRetryKey] = useState(0)
+
   // Reset zoom & rotation when document changes
   useEffect(() => {
     setZoom(100)
@@ -69,16 +73,34 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
     setPdfDoc(null)
     setPdfError(null)
     setImgError(false)
-  }, [fileName, fileUrl])
+    setImgLoading(false)
+  }, [fileName, fileUrl, retryKey])
 
-  // Resolve URL
+  // Resolve URL with safety timeout (max 4.5s)
   useEffect(() => {
     let active = true
     setResolving(true)
 
+    // Timeout safety net: resolveReceiptUrl must never hang indefinitely
+    const resolveTimer = setTimeout(() => {
+      if (!active) return
+      console.warn('Timeout resolving receipt URL for:', fileName)
+      setResolving(false)
+      // If we don't have a resolved url yet, fallback to fileUrl if present
+      if (fileUrl && fileUrl.trim().length > 0) {
+        const isDataImg = fileUrl.trim().startsWith('data:image/')
+        setResolvedUrl(fileUrl.trim())
+        setIsImage(isDataImg || !fileUrl.toLowerCase().endsWith('.pdf'))
+        setIsPdf(!isDataImg && fileUrl.toLowerCase().endsWith('.pdf'))
+      } else {
+        setResolvedUrl(null)
+      }
+    }, 4500)
+
     resolveReceiptUrl(fileUrl, fileName)
       .then((res) => {
         if (!active) return
+        clearTimeout(resolveTimer)
         setResolvedUrl(res.url)
         setIsPdf(res.isPdf)
         setIsImage(res.isImage)
@@ -89,6 +111,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
       })
       .catch((err) => {
         if (!active) return
+        clearTimeout(resolveTimer)
         console.warn('Error resolving receipt URL:', err)
         setResolvedUrl(null)
         setResolving(false)
@@ -96,10 +119,38 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
 
     return () => {
       active = false
+      clearTimeout(resolveTimer)
     }
-  }, [fileUrl, fileName, onDocumentLoaded])
+  }, [fileUrl, fileName, onDocumentLoaded, retryKey])
 
-  // Load PDF when resolved URL is identified as PDF
+  // Image decode & load timeout (max 5s)
+  useEffect(() => {
+    if (!resolvedUrl || isPdf) {
+      setImgLoading(false)
+      return
+    }
+
+    setImgLoading(true)
+    setImgError(false)
+
+    // Watchdog timer in case img onLoad / onError never fires (e.g. malformed data: URL)
+    const imgTimer = setTimeout(() => {
+      setImgLoading((currentLoading) => {
+        if (currentLoading) {
+          console.warn('Watchdog timeout: image failed to load within 5s for', fileName)
+          setImgError(true)
+          return false
+        }
+        return false
+      })
+    }, 5000)
+
+    return () => {
+      clearTimeout(imgTimer)
+    }
+  }, [resolvedUrl, isPdf, fileName, retryKey])
+
+  // Load PDF when resolved URL is identified as PDF (with 7s timeout safeguard)
   useEffect(() => {
     if (!resolvedUrl || !isPdf) {
       setPdfDoc(null)
@@ -109,6 +160,13 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
     let active = true
     setPdfLoading(true)
     setPdfError(null)
+
+    const pdfTimeout = setTimeout(() => {
+      if (!active) return
+      console.warn('PDF loading timed out for:', fileName)
+      setPdfError('Tempo esgotado ao carregar o PDF.')
+      setPdfLoading(false)
+    }, 7000)
 
     const loadingTask = pdfjsLib.getDocument({
       url: resolvedUrl,
@@ -120,6 +178,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
     loadingTask.promise
       .then((doc) => {
         if (!active) return
+        clearTimeout(pdfTimeout)
         setPdfDoc(doc)
         setTotalPages(doc.numPages)
         setPdfLoading(false)
@@ -127,6 +186,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
       })
       .catch((err) => {
         if (!active) return
+        clearTimeout(pdfTimeout)
         console.warn('Failed to load PDF document:', err)
         setPdfError('Não foi possível processar as páginas deste arquivo PDF.')
         setPdfLoading(false)
@@ -134,9 +194,10 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
 
     return () => {
       active = false
+      clearTimeout(pdfTimeout)
       loadingTask.destroy()
     }
-  }, [resolvedUrl, isPdf, onDocumentLoaded])
+  }, [resolvedUrl, isPdf, onDocumentLoaded, retryKey, fileName])
 
   // Render current PDF page on canvas
   const renderPdfPage = useCallback(async () => {
@@ -312,14 +373,14 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
 
       {/* Document Canvas / Image / Fallback Paper Area */}
       <div className="bg-slate-200/60 p-4 sm:p-6 min-h-[480px] max-h-[640px] flex items-center justify-center overflow-auto relative">
-        {resolving || (isPdf && pdfLoading) ? (
+        {resolving || (isPdf && pdfLoading) || (!isPdf && imgLoading && !imgError) ? (
           <div className="flex flex-col items-center justify-center text-slate-500 py-16 gap-3">
             <Loader2 className="w-8 h-8 animate-spin text-[#1e40af]" />
             <p className="text-xs font-medium">Carregando comprovante...</p>
           </div>
         ) : hasNoFile ? (
           /* Friendly Fallback: File not available */
-          <div className="text-center p-8 bg-white/80 rounded-xl border border-slate-300 shadow-sm max-w-sm">
+          <div className="text-center p-6 sm:p-8 bg-white/90 rounded-xl border border-slate-300 shadow-sm max-w-sm">
             <div className="w-12 h-12 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center mx-auto mb-3">
               <FileQuestion className="w-6 h-6" />
             </div>
@@ -328,6 +389,17 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
               O arquivo original <strong>"{fileName}"</strong> não foi encontrado no armazenamento
               ou foi registrado apenas com os dados fiscais do OCR.
             </p>
+            <div className="flex items-center justify-center gap-2 mb-3">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setRetryKey((k) => k + 1)}
+                className="text-xs gap-1.5 h-7"
+              >
+                <RotateCw className="w-3 h-3" />
+                Tentar novamente
+              </Button>
+            </div>
             {ocrRawText && (
               <span className="text-[11px] bg-slate-100 text-slate-600 px-2 py-1 rounded inline-block font-mono">
                 Texto fiscal extraído preservado abaixo
@@ -336,26 +408,42 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
           </div>
         ) : hasRenderError ? (
           /* Friendly Fallback: Error rendering file */
-          <div className="text-center p-8 bg-white/90 rounded-xl border border-rose-200 shadow-sm max-w-sm">
+          <div className="text-center p-6 sm:p-8 bg-white/95 rounded-xl border border-rose-200 shadow-sm max-w-sm">
             <div className="w-12 h-12 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mx-auto mb-3">
               <AlertCircle className="w-6 h-6" />
             </div>
-            <h4 className="text-sm font-bold text-slate-800">Falha na exibição do arquivo</h4>
+            <h4 className="text-sm font-bold text-slate-800">Não foi possível exibir o preview</h4>
             <p className="text-xs text-slate-500 mt-1 mb-4">
-              Não foi possível renderizar a visualização direta do documento.
+              A imagem ou PDF não pôde ser renderizado diretamente pelo navegador. Você pode
+              conferir os dados pelo OCR ou tentar novamente.
             </p>
-            {resolvedUrl && (
-              <a
-                href={resolvedUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                download={fileName}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#1e40af] text-white text-xs font-semibold rounded-md shadow-xs hover:bg-[#1d3d9e]"
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setImgError(false)
+                  setPdfError(null)
+                  setRetryKey((k) => k + 1)
+                }}
+                className="text-xs gap-1.5 h-8 border-slate-300 text-slate-700 hover:bg-slate-100"
               >
-                <Download className="w-3.5 h-3.5" />
-                Baixar ou abrir arquivo
-              </a>
-            )}
+                <RotateCw className="w-3.5 h-3.5" />
+                Tentar novamente
+              </Button>
+              {resolvedUrl && !resolvedUrl.startsWith('data:') && (
+                <a
+                  href={resolvedUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  download={fileName}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#1e40af] text-white text-xs font-semibold rounded-md shadow-xs hover:bg-[#1d3d9e] h-8"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  Abrir original
+                </a>
+              )}
+            </div>
           </div>
         ) : isPdf ? (
           /* PDF Canvas Display with Zoom & Rotation applied */
@@ -380,7 +468,14 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
             <img
               src={resolvedUrl || fileUrl}
               alt={`Comprovante ${fileName}`}
-              onError={() => setImgError(true)}
+              onLoad={() => {
+                setImgLoading(false)
+                setImgError(false)
+              }}
+              onError={() => {
+                setImgLoading(false)
+                setImgError(true)
+              }}
               className="max-w-[420px] w-full h-auto object-contain select-none block"
               draggable={false}
             />

@@ -22,10 +22,16 @@ async function getBucketFileNames(): Promise<string[]> {
   }
 
   try {
-    const { data, error } = await supabase.storage.from('comprovantes').list('', {
+    // Race with a 3.5s timeout so bucket listing never blocks forever on slow or offline networks
+    const listPromise = supabase.storage.from('comprovantes').list('', {
       limit: 100,
       sortBy: { column: 'created_at', order: 'desc' },
     })
+    const timeoutPromise = new Promise<{ data: null; error: Error }>((resolve) =>
+      setTimeout(() => resolve({ data: null, error: new Error('Bucket list timeout') }), 3500),
+    )
+
+    const { data, error } = await Promise.race([listPromise, timeoutPromise])
 
     if (error || !data) {
       console.warn('Error listing bucket comprovantes:', error)

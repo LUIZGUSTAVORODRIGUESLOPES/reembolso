@@ -195,11 +195,29 @@ export default function TriagePage() {
     const initialTime = currentExpense.issue_time || parsedFallback?.issue_time || ''
     setIssueTime(initialTime)
 
-    // Determine merchant_name: if stored is generic "Estabelecimento a identificar", check fallback
+    // Determine merchant_name: clean up any legacy corrupted values (e.g. "PÁGINA 1] ---")
+    const isCorruptedMerchant = (val: string) => {
+      const v = val.toLowerCase()
+      return (
+        v.includes('página') ||
+        v.includes('pagina') ||
+        v.startsWith('---') ||
+        v.startsWith('[') ||
+        v.includes('---') ||
+        v.includes(']')
+      )
+    }
+
     let initialMerchant = currentExpense.merchant_name || ''
+    if (isCorruptedMerchant(initialMerchant)) {
+      // Discard invalid page marker stored before v0.0.64
+      initialMerchant = ''
+    }
+
     if (
       (!initialMerchant || initialMerchant === 'Estabelecimento a identificar') &&
-      parsedFallback?.merchant_name
+      parsedFallback?.merchant_name &&
+      !isCorruptedMerchant(parsedFallback.merchant_name)
     ) {
       initialMerchant = parsedFallback.merchant_name
     }

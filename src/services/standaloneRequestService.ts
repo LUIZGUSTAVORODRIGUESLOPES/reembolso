@@ -63,6 +63,7 @@ class StandaloneRequestService {
   public async listRequests(): Promise<StandaloneRequest[]> {
     let requestsRaw: any[] | null = null
 
+    // 1. Tentar embed direto com profiles
     try {
       const { data, error } = await this.client
         .from('standalone_requests')
@@ -71,11 +72,17 @@ class StandaloneRequestService {
 
       if (!error && data) {
         requestsRaw = data
+      } else if (error) {
+        console.warn(
+          'Standalone requests join with profiles returned error, falling back to clean select:',
+          error?.message,
+        )
       }
-    } catch {
-      // fallback
+    } catch (joinErr) {
+      console.warn('Caught exception in standalone requests profiles join:', joinErr)
     }
 
+    // 2. Fallback resiliente caso o embed falhe (ex.: schema cache ainda não recarregado)
     if (!requestsRaw) {
       const { data: fallback, error } = await this.client
         .from('standalone_requests')
@@ -89,7 +96,7 @@ class StandaloneRequestService {
       requestsRaw = fallback || []
     }
 
-    // Enrich with profiles if missing
+    // 3. Complementar com perfis em query separada para os que não vieram populados
     const missingProfileUserIds = Array.from(
       new Set(
         (requestsRaw || [])
@@ -114,8 +121,8 @@ class StandaloneRequestService {
             return r
           })
         }
-      } catch {
-        // non-blocking
+      } catch (profErr) {
+        console.warn('Non-blocking: could not enrich standalone requests with profiles:', profErr)
       }
     }
 
@@ -123,17 +130,63 @@ class StandaloneRequestService {
   }
 
   public async getRequest(id: string): Promise<StandaloneRequest | null> {
-    const { data, error } = await this.client
-      .from('standalone_requests')
-      .select('*, user_profile:profiles(*)')
-      .eq('id', id)
-      .maybeSingle()
+    let row: any = null
 
-    if (error) {
-      console.error('Error fetching request:', error)
-      throw error
+    // 1. Tentar com embed
+    try {
+      const { data, error } = await this.client
+        .from('standalone_requests')
+        .select('*, user_profile:profiles(*)')
+        .eq('id', id)
+        .maybeSingle()
+
+      if (!error && data) {
+        row = data
+      } else if (error) {
+        console.warn(
+          'Get standalone request join with profiles returned error, falling back to clean select:',
+          error?.message,
+        )
+      }
+    } catch (joinErr) {
+      console.warn('Caught exception in get standalone request join:', joinErr)
     }
-    return data ? this.mapRow(data) : null
+
+    // 2. Fallback resiliente
+    if (!row) {
+      const { data: fallbackData, error: fallbackErr } = await this.client
+        .from('standalone_requests')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle()
+
+      if (fallbackErr) {
+        console.error('Error fetching request in fallback:', fallbackErr)
+        throw fallbackErr
+      }
+      row = fallbackData
+    }
+
+    if (!row) return null
+
+    // 3. Complementar user_profile se ausente
+    if (row.user_id && !row.user_profile) {
+      try {
+        const { data: prof } = await this.client
+          .from('profiles')
+          .select('*')
+          .eq('id', row.user_id)
+          .maybeSingle()
+
+        if (prof) {
+          row.user_profile = prof
+        }
+      } catch (profErr) {
+        console.warn('Non-blocking: could not fetch profile for single request:', profErr)
+      }
+    }
+
+    return this.mapRow(row)
   }
 
   public async createRequest(params: {

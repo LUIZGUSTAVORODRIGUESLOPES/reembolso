@@ -100,9 +100,14 @@ class SupabaseStorageService {
 
       if (!error && data) {
         tripRaw = data
+      } else if (error) {
+        console.warn(
+          'Trip join with profiles returned error, falling back to clean select:',
+          error?.message,
+        )
       }
-    } catch {
-      // fallback
+    } catch (joinErr) {
+      console.warn('Caught error fetching trip with profile join:', joinErr)
     }
 
     if (!tripRaw) {

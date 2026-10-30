@@ -25,7 +25,8 @@ import {
   FileCheck2,
 } from 'lucide-react'
 import { storageService } from '@/services/storageService'
-import { Trip, TripStatus } from '@/types/database'
+import { standaloneRequestService } from '@/services/standaloneRequestService'
+import { Trip, TripStatus, StandaloneRequest } from '@/types/database'
 import {
   formatCurrencyBRL,
   formatDateRangeBR,
@@ -33,6 +34,7 @@ import {
   TRANSPORT_LABELS,
   normalizeSearchText,
   getEffectiveTripStatus,
+  getEffectiveStandaloneStatus,
 } from '@/lib/formatters'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -170,9 +172,33 @@ export default function Index({ defaultPhase = 'em_aberto' }: IndexProps = {}) {
     setLoading(true)
     try {
       const allTrips = await storageService.listTrips()
-      const m = await storageService.getDashboardMetrics()
+      const [m, standaloneRequests] = await Promise.all([
+        storageService.getDashboardMetrics(),
+        standaloneRequestService.listRequests().catch((err) => {
+          console.warn('Falha não-bloqueante ao carregar solicitações avulsas no Dashboard:', err)
+          return [] as StandaloneRequest[]
+        }),
+      ])
+
+      // Saldo em aberto das solicitações avulsas (não quitadas)
+      // Se houver valor parcialmente quitado/reembolsado (settlement_amount), desconta; senão considera o amount total
+      const pendingStandaloneTotal = (standaloneRequests || []).reduce((acc, req) => {
+        const effStatus = getEffectiveStandaloneStatus(req)
+        if (effStatus === 'quitada') return acc
+        const fullAmount = Number(req.amount || 0)
+        const settledAmount =
+          req.settlement_amount != null && !isNaN(Number(req.settlement_amount))
+            ? Number(req.settlement_amount)
+            : 0
+        const openAmount = Math.max(0, fullAmount - settledAmount)
+        return acc + openAmount
+      }, 0)
+
       setTrips(allTrips)
-      setMetrics(m)
+      setMetrics({
+        ...m,
+        totalToRefund: Number((m.totalToRefund + pendingStandaloneTotal).toFixed(2)),
+      })
     } catch (err: any) {
       console.error('Falha ao carregar viagens no Dashboard:', err)
       const errorMsg = err?.message || 'Erro de comunicação com o servidor'

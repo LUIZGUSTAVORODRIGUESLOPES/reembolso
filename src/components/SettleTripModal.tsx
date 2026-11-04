@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -24,14 +24,18 @@ import {
   ArrowRight,
   ShieldCheck,
   Info,
+  FileText,
 } from 'lucide-react'
-import { Trip } from '@/types/database'
+import { Trip, StandaloneRequest } from '@/types/database'
 import { storageService } from '@/services/storageService'
+import { standaloneRequestService } from '@/services/standaloneRequestService'
+import { getEffectiveStandaloneStatus } from '@/lib/formatters'
 import {
   formatCurrencyBRL,
   formatDateBR,
   formatDateRangeBR,
   TRIP_STATUS_CONFIG,
+  STANDALONE_STATUS_CONFIG,
   getEffectiveTripStatus,
 } from '@/lib/formatters'
 import { useToast } from '@/hooks/use-toast'
@@ -76,7 +80,9 @@ export function SettleTripModal({
   )
   const [batchDepositTotalStr, setBatchDepositTotalStr] = useState<string>('')
   const [allEligibleTrips, setAllEligibleTrips] = useState<Trip[]>([])
+  const [allEligibleRequests, setAllEligibleRequests] = useState<StandaloneRequest[]>([])
   const [selectedTripIds, setSelectedTripIds] = useState<string[]>([currentTrip.id])
+  const [selectedRequestIds, setSelectedRequestIds] = useState<string[]>([])
   const [loadingEligibleTrips, setLoadingEligibleTrips] = useState<boolean>(false)
 
   // Confirmation/saving state
@@ -130,6 +136,7 @@ export function SettleTripModal({
       setBatchDepositDate(todayStr)
       setBatchDepositTotalStr('')
       setSelectedTripIds([currentTrip.id])
+      setSelectedRequestIds([])
       loadEligibleTrips()
     }
   }, [open, currentTrip.id, currentTrip.total_amount])
@@ -137,10 +144,22 @@ export function SettleTripModal({
   const loadEligibleTrips = async () => {
     setLoadingEligibleTrips(true)
     try {
-      const [trips, allExps] = await Promise.all([
+      const [trips, allExps, standaloneRequests] = await Promise.all([
         storageService.listTrips(),
         storageService.listExpenses().catch(() => []),
+        standaloneRequestService.listRequests().catch((err) => {
+          console.warn('Erro ao carregar solicitações avulsas para quitação conjunta:', err)
+          return [] as StandaloneRequest[]
+        }),
       ])
+
+      // Solicitações avulsas elegíveis: somente com status efetivo "enviada"
+      // (rascunhos, já quitadas e outros status ficam fora da quitação múltipla)
+      const eligibleRequests = (standaloneRequests || []).filter(
+        (r) => getEffectiveStandaloneStatus(r) === 'empacotada',
+      )
+      setAllEligibleRequests(eligibleRequests)
+      setSelectedRequestIds([])
 
       // Mapear pendências por trip_id
       const pendingMap = new Map<string, boolean>()
@@ -191,12 +210,35 @@ export function SettleTripModal({
     )
   }
 
+  // Toggle selection de solicitação avulsa na quitação múltipla
+  const handleToggleRequestSelection = (requestId: string) => {
+    setSelectedRequestIds((prev) =>
+      prev.includes(requestId) ? prev.filter((id) => id !== requestId) : [...prev, requestId],
+    )
+  }
+
   // Cálculo da soma em tempo real das viagens selecionadas
   const selectedTripsSum = useMemo(() => {
     return allEligibleTrips
       .filter((t) => selectedTripIds.includes(t.id))
       .reduce((sum, t) => sum + (t.total_amount || 0), 0)
   }, [allEligibleTrips, selectedTripIds])
+
+  // Soma em tempo real das solicitações avulsas selecionadas
+  const selectedRequestsSum = useMemo(() => {
+    return allEligibleRequests
+      .filter((r) => selectedRequestIds.includes(r.id))
+      .reduce((sum, r) => sum + (r.amount || 0), 0)
+  }, [allEligibleRequests, selectedRequestIds])
+
+  // Soma total (viagens + solicitações avulsas) para validação do depósito
+  const selectedTotalSum = useMemo(
+    () => Number((selectedTripsSum + selectedRequestsSum).toFixed(2)),
+    [selectedTripsSum, selectedRequestsSum],
+  )
+
+  // Total de itens selecionados (viagens + solicitações avulsas)
+  const selectedItemsCount = selectedTripIds.length + selectedRequestIds.length
 
   // Parse do valor total do depósito digitado pelo usuário (modo conjunto)
   const parsedBatchDepositTotal = useMemo(() => {
@@ -205,11 +247,11 @@ export function SettleTripModal({
     return isNaN(val) ? 0 : val
   }, [batchDepositTotalStr])
 
-  // Diferença entre soma das viagens e o depósito informado
+  // Diferença entre soma dos itens (viagens + avulsas) e o depósito informado
   const depositDiff = useMemo(() => {
     if (!parsedBatchDepositTotal) return 0
-    return Number((parsedBatchDepositTotal - selectedTripsSum).toFixed(2))
-  }, [parsedBatchDepositTotal, selectedTripsSum])
+    return Number((parsedBatchDepositTotal - selectedTotalSum).toFixed(2))
+  }, [parsedBatchDepositTotal, selectedTotalSum])
 
   const isSumMatching = useMemo(() => {
     if (!parsedBatchDepositTotal) return false
@@ -306,11 +348,11 @@ export function SettleTripModal({
       return
     }
 
-    if (selectedTripIds.length <= 1) {
+    if (selectedItemsCount <= 1) {
       toast({
-        title: 'Selecione mais de uma viagem',
+        title: 'Selecione mais de um documento',
         description:
-          'Para depósito conjunto, selecione duas ou mais viagens que compõem o valor total. Para apenas uma viagem, selecione a opção "Não".',
+          'Para depósito conjunto, selecione duas ou mais viagens/solicitações que compõem o valor total. Para apenas uma viagem, selecione a opção "Não".',
         variant: 'destructive',
       })
       return
@@ -318,8 +360,8 @@ export function SettleTripModal({
 
     if (!isSumMatching) {
       toast({
-        title: 'A soma das viagens não bate com o valor do depósito',
-        description: `Diferença de ${formatCurrencyBRL(Math.abs(depositDiff))}. Ajuste as viagens selecionadas ou o valor total do depósito antes de confirmar.`,
+        title: 'A soma dos itens não bate com o valor do depósito',
+        description: `Diferença de ${formatCurrencyBRL(Math.abs(depositDiff))}. Ajuste as viagens/solicitações selecionadas ou o valor total do depósito antes de confirmar.`,
         variant: 'destructive',
       })
       return
@@ -334,19 +376,43 @@ export function SettleTripModal({
         }
       }
 
-      const updatedList = await storageService.settleBatchTrips({
-        tripIds: selectedTripIds,
-        depositDate: batchDepositDate,
-        depositTotal: parsedBatchDepositTotal,
-        tripsAmounts: tripsAmountsMap,
-        user,
-      })
+      const requestsAmountsMap: Record<string, number> = {}
+      for (const r of allEligibleRequests) {
+        if (selectedRequestIds.includes(r.id)) {
+          requestsAmountsMap[r.id] = r.amount || 0
+        }
+      }
+
+      const requestsToSettle = selectedRequestIds.filter(
+        (id) => requestsAmountsMap[id] !== undefined,
+      )
+
+      const [updatedList, updatedRequests] = await Promise.all([
+        selectedTripIds.length
+          ? storageService.settleBatchTrips({
+              tripIds: selectedTripIds,
+              depositDate: batchDepositDate,
+              depositTotal: parsedBatchDepositTotal,
+              tripsAmounts: tripsAmountsMap,
+              user,
+            })
+          : Promise.resolve([] as Trip[]),
+        requestsToSettle.length
+          ? standaloneRequestService.settleBatchRequests({
+              requestIds: requestsToSettle,
+              depositDate: batchDepositDate,
+              depositTotal: parsedBatchDepositTotal,
+              requestsAmounts: requestsAmountsMap,
+              user,
+            })
+          : Promise.resolve([] as StandaloneRequest[]),
+      ])
 
       const myUpdated = updatedList.find((t) => t.id === currentTrip.id) || updatedList[0]
 
       toast({
         title: 'Quitação conjunta realizada com sucesso! 🎉',
-        description: `${updatedList.length} viagens foram quitadas simultaneamente com depósito total de ${formatCurrencyBRL(parsedBatchDepositTotal)}.`,
+        description: `${selectedItemsCount} documento(s) foram quitados simultaneamente com depósito total de ${formatCurrencyBRL(parsedBatchDepositTotal)}.`,
       })
 
       if (myUpdated) {
@@ -597,18 +663,19 @@ export function SettleTripModal({
                 <div className="flex items-center justify-between">
                   <Label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
                     <Layers className="w-3.5 h-3.5 text-blue-600" />
-                    Selecione as viagens que somam este depósito ({selectedTripIds.length}{' '}
-                    selecionadas)
+                    Selecione as viagens e solicitações avulsas que somam este depósito (
+                    {selectedItemsCount} selecionados)
                   </Label>
                   <span className="text-[11px] text-slate-500">
-                    Viagens elegíveis: <strong>auditada</strong> ou <strong>fechada</strong>
+                    Viagens: <strong>auditada</strong>/<strong>fechada</strong> • Avulsas:{' '}
+                    <strong>enviada</strong>
                   </span>
                 </div>
 
                 {loadingEligibleTrips ? (
                   <div className="p-6 text-center text-xs text-slate-500 border rounded-lg">
                     <Loader2 className="w-4 h-4 animate-spin mx-auto mb-1 text-blue-600" />
-                    Carregando viagens...
+                    Carregando viagens e solicitações...
                   </div>
                 ) : (
                   <div className="border border-slate-200 rounded-xl overflow-hidden max-h-56 overflow-y-auto divide-y divide-slate-100 bg-white">
@@ -681,6 +748,60 @@ export function SettleTripModal({
                         </div>
                       )
                     })}
+
+                    {allEligibleRequests.map((r) => {
+                      const isSelected = selectedRequestIds.includes(r.id)
+                      const statusConf = STANDALONE_STATUS_CONFIG.empacotada
+
+                      return (
+                        <div
+                          key={r.id}
+                          onClick={() => handleToggleRequestSelection(r.id)}
+                          className={`p-3 flex items-center justify-between gap-3 text-xs transition-colors ${
+                            isSelected
+                              ? 'bg-blue-50/60 hover:bg-blue-50 cursor-pointer'
+                              : 'hover:bg-slate-50 cursor-pointer'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <Checkbox
+                              checked={isSelected}
+                              onCheckedChange={() => handleToggleRequestSelection(r.id)}
+                            />
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-slate-900">{r.description}</span>
+                                <Badge className="bg-violet-100 text-violet-800 text-[10px] px-1.5 py-0 font-semibold border-none gap-1">
+                                  <FileText className="w-3 h-3" />
+                                  Solicitação Avulsa
+                                </Badge>
+                                <span
+                                  className={`inline-flex items-center px-1.5 py-0.2 rounded-full text-[10px] font-semibold border ${statusConf.badgeClass}`}
+                                >
+                                  {statusConf.label}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-slate-500">
+                                {formatDateBR(r.expense_date)} •{' '}
+                                {r.user_profile?.full_name || 'Solicitante'}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="text-right shrink-0">
+                            <span className="font-bold text-slate-900 tabular-nums">
+                              {formatCurrencyBRL(r.amount)}
+                            </span>
+                          </div>
+                        </div>
+                      )
+                    })}
+
+                    {allEligibleTrips.length === 0 && allEligibleRequests.length === 0 && (
+                      <div className="p-6 text-center text-xs text-slate-500">
+                        Nenhuma viagem ou solicitação avulsa elegível para quitação.
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -698,10 +819,10 @@ export function SettleTripModal({
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b pb-2.5 mb-2.5 border-slate-200/70">
                   <div>
                     <span className="text-[11px] uppercase tracking-wider font-bold text-slate-500 block">
-                      Soma das Viagens Selecionadas ({selectedTripIds.length})
+                      Soma dos Itens Selecionados ({selectedItemsCount})
                     </span>
                     <span className="text-lg font-black text-slate-900 tabular-nums">
-                      {formatCurrencyBRL(selectedTripsSum)}
+                      {formatCurrencyBRL(selectedTotalSum)}
                     </span>
                   </div>
 
@@ -729,8 +850,8 @@ export function SettleTripModal({
                     <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                     <span>
                       Valores conferem perfeitamente! Depósito de{' '}
-                      {formatCurrencyBRL(parsedBatchDepositTotal)} cobre as {selectedTripIds.length}{' '}
-                      viagens selecionadas.
+                      {formatCurrencyBRL(parsedBatchDepositTotal)} cobre os {selectedItemsCount}{' '}
+                      itens selecionados.
                     </span>
                   </div>
                 ) : (
@@ -743,10 +864,10 @@ export function SettleTripModal({
                       </span>
                     </div>
                     <p className="text-[11px] text-rose-700 leading-relaxed pl-6">
-                      A soma das viagens selecionadas ({formatCurrencyBRL(selectedTripsSum)}) é{' '}
+                      A soma dos itens selecionados ({formatCurrencyBRL(selectedTotalSum)}) é{' '}
                       {depositDiff > 0 ? 'menor' : 'maior'} que o total depositado (
-                      {formatCurrencyBRL(parsedBatchDepositTotal)}). Selecione as viagens corretas
-                      ou corrija o valor informado.
+                      {formatCurrencyBRL(parsedBatchDepositTotal)}). Selecione os itens corretos ou
+                      corrija o valor informado.
                     </p>
                   </div>
                 )}
@@ -755,10 +876,10 @@ export function SettleTripModal({
               <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-[11px] text-amber-900 flex items-start gap-2">
                 <ShieldCheck className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                 <p>
-                  Todas as <strong>{selectedTripIds.length} viagens selecionadas</strong> serão
-                  marcadas conjuntamente como <strong>Reembolsadas</strong> na mesma data de
-                  depósito ({formatDateBR(batchDepositDate)}), com identificador comum de lote para
-                  rastreabilidade contábil.
+                  Todos os <strong>{selectedItemsCount} itens selecionados</strong> (viagens e
+                  solicitações avulsas) serão marcados conjuntamente como <strong>quitados</strong>{' '}
+                  na mesma data de depósito ({formatDateBR(batchDepositDate)}) , com identificador
+                  comum de lote para rastreabilidade contábil.
                 </p>
               </div>
 
@@ -803,7 +924,7 @@ export function SettleTripModal({
                       !batchDepositDate ||
                       parsedBatchDepositTotal <= 0 ||
                       !isSumMatching ||
-                      selectedTripIds.length <= 1 ||
+                      selectedItemsCount <= 1 ||
                       currentTripHasPending
                     }
                     className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold gap-1.5 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
@@ -811,12 +932,15 @@ export function SettleTripModal({
                     {submitting ? (
                       <>
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>Quitando Viagens...</span>
+                        <span>Quitando Documentos...</span>
                       </>
                     ) : (
                       <>
                         <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>Confirmar Quitação Conjunta ({selectedTripIds.length} viagens)</span>
+                        <span>
+                          Confirmar Quitação Conjunta ({selectedItemsCount}{' '}
+                          {selectedRequestIds.length > 0 ? 'itens' : 'viagens'})
+                        </span>
                       </>
                     )}
                   </Button>

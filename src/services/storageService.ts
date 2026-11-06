@@ -928,46 +928,47 @@ class SupabaseStorageService {
 
     const rules: AuditEvaluationRule[] = []
 
+    // Palavras-chave para identificar bilhetes / passagens aéreas e companhias aéreas
+    const flightKeywords = [
+      'latam',
+      'gol linhas',
+      'gol',
+      'azul linhas',
+      'azul',
+      'passagem',
+      'bilhete',
+      'aereo',
+      'aéreo',
+      'voo',
+      'boarding',
+      'aeroporto',
+      'airline',
+      'flight',
+      'e-ticket',
+      'eticket',
+      'localizador',
+      'trecho',
+    ]
+
+    const isFlightExpense = (e: any): boolean => {
+      const merchant = (e.merchant_name || '').toLowerCase()
+      const text = (e.ocr_raw_text || '').toLowerCase()
+      const isTransportCategory = e.category === 'transporte'
+      const matchesKeyword = flightKeywords.some((k) => merchant.includes(k) || text.includes(k))
+
+      return (
+        (isTransportCategory && matchesKeyword) ||
+        merchant.includes('linhas aéreas') ||
+        merchant.includes('airline')
+      )
+    }
+
     // Regra: Transporte Principal da Viagem (Comprovante de Passagem Aérea / Aluguel de Carro)
     const transportType = trip.transport_type
     const transportLog = logs.find((l) => l.rule_key === 'transporte_principal_ausente')
 
     if (transportType === 'aéreo') {
-      const flightKeywords = [
-        'latam',
-        'gol linhas',
-        'gol',
-        'azul linhas',
-        'azul',
-        'passagem',
-        'bilhete',
-        'aereo',
-        'aéreo',
-        'voo',
-        'boarding',
-        'aeroporto',
-        'airline',
-        'flight',
-        'e-ticket',
-        'eticket',
-        'localizador',
-        'trecho',
-      ]
-
-      const hasFlightExpense = expenses.some((e) => {
-        const merchant = (e.merchant_name || '').toLowerCase()
-        const text = (e.ocr_raw_text || '').toLowerCase()
-        const isTransportCategory = e.category === 'transporte'
-
-        const matchesKeyword = flightKeywords.some((k) => merchant.includes(k) || text.includes(k))
-
-        // Se a categoria for transporte e bater com palavra-chave, ou tiver menção explícita de passagem/voo
-        return (
-          (isTransportCategory && matchesKeyword) ||
-          merchant.includes('linhas aéreas') ||
-          merchant.includes('airline')
-        )
-      })
+      const hasFlightExpense = expenses.some((e) => isFlightExpense(e))
 
       if (!hasFlightExpense) {
         rules.push({
@@ -1045,10 +1046,42 @@ class SupabaseStorageService {
     }
 
     // Regra 1: Viagem Aérea sem transporte terrestre (uber/táxi/estacionamento) nas datas
+    // Passagem aérea / bilhete de embarque conta APENAS como transporte principal, nunca como transporte terrestre
     if (trip.transport_type === 'aéreo') {
-      const groundExpenses = expenses.filter((e) =>
-        ['uber_taxi', 'estacionamento', 'transporte'].includes(e.category),
-      )
+      const groundExpenses = expenses.filter((e) => {
+        // Passagens aéreas / voos nunca contam como transporte terrestre para aeroporto
+        if (isFlightExpense(e)) {
+          return false
+        }
+
+        // Estacionamento ou Uber/Táxi válidos
+        if (e.category === 'uber_taxi' || e.category === 'estacionamento') {
+          return true
+        }
+
+        // Se estiver como categoria 'transporte', só é terrestre se tiver indicação de transporte terrestre e não for voo
+        if (e.category === 'transporte') {
+          const merchant = (e.merchant_name || '').toLowerCase()
+          const text = (e.ocr_raw_text || '').toLowerCase()
+
+          // Se tiver indicação explícita de transporte terrestre (uber, taxi, táxi, 99, transfer, estacionamento, garage)
+          const groundKeywords = [
+            'uber',
+            'taxi',
+            'táxi',
+            '99',
+            'cabify',
+            'transfer',
+            'estacionamento',
+            'estapar',
+            'garagem',
+            'parking',
+          ]
+          return groundKeywords.some((k) => merchant.includes(k) || text.includes(k))
+        }
+
+        return false
+      })
       const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
 
       if (groundExpenses.length === 0) {
@@ -1065,7 +1098,7 @@ class SupabaseStorageService {
         rules.push({
           key: 'voo_sem_transporte_aeroporto',
           title: 'Transporte Terrestre para Aeroporto',
-          message: `${groundExpenses.length} comprovante(s) de transporte terrestre/Uber identificado(s) com sucesso.`,
+          message: `${groundExpenses.length} comprovante(s) de transporte terrestre/Uber/Estacionamento identificado(s) com sucesso.`,
           severity: 'pass',
           status: 'pass',
         })

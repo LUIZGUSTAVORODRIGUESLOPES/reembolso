@@ -35,3 +35,11 @@ DROP POLICY IF EXISTS "app_settings_insert_policy" ON public.app_settings;
 CREATE POLICY "app_settings_insert_policy" ON public.app_settings
   FOR INSERT TO authenticated
   WITH CHECK (true);
+
+-- Grant permissions explicitly to authenticated and service_role
+GRANT ALL ON TABLE public.app_settings TO authenticated;
+GRANT ALL ON TABLE public.app_settings TO service_role;
+GRANT SELECT ON TABLE public.app_settings TO anon;
+
+-- Recarregar o schema cache do PostgREST para expor a tabela imediatamente na API
+NOTIFY pgrst, 'reload schema';

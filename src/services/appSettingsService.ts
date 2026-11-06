@@ -133,15 +133,64 @@ export const appSettingsService = {
       payload.updated_by = userId
     }
 
-    const { data, error } = await (supabase as any)
+    let data: any = null
+    let error: any = null
+
+    // 1. Tentar upsert primário
+    const upsertRes = await (supabase as any)
       .from('app_settings')
       .upsert(payload, { onConflict: 'id' })
       .select('azul_point_rate')
       .single()
 
+    data = upsertRes.data
+    error = upsertRes.error
+
+    // 2. Se falhar no upsert por alguma restrição de chave ou política, tentar UPDATE direto da linha 'default'
+    if (error) {
+      console.warn('Tentativa inicial de upsert falhou, tentando update:', error.message)
+      const updateRes = await (supabase as any)
+        .from('app_settings')
+        .update({
+          azul_point_rate: roundedRate,
+          updated_at: payload.updated_at,
+          ...(userId ? { updated_by: userId } : {}),
+        })
+        .eq('id', 'default')
+        .select('azul_point_rate')
+        .single()
+
+      if (!updateRes.error && updateRes.data) {
+        data = updateRes.data
+        error = null
+      } else {
+        // Se a linha 'default' não existir, tentar INSERT
+        const insertRes = await (supabase as any)
+          .from('app_settings')
+          .insert(payload)
+          .select('azul_point_rate')
+          .single()
+
+        if (!insertRes.error && insertRes.data) {
+          data = insertRes.data
+          error = null
+        }
+      }
+    }
+
     if (error) {
       console.error('Falha ao atualizar taxa em app_settings:', error)
-      throw error
+      // Mensagem clara em português se o erro for do schema cache do PostgREST
+      if (
+        error.message?.includes('schema cache') ||
+        error.code === 'PGRST204' ||
+        error.code === 'PGRST200'
+      ) {
+        throw new Error(
+          'O schema do banco está sendo sincronizado. A tabela de configurações foi registrada e recarregada; tente novamente em instantes.',
+        )
+      }
+      throw new Error(error.message || 'Erro ao persistir taxa no banco de dados.')
     }
 
     const updated = Number(data?.azul_point_rate) || roundedRate

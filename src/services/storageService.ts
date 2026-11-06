@@ -1046,8 +1046,723 @@ class SupabaseStorageService {
 
     // Regra 1: Viagem Aérea sem transporte terrestre (uber/táxi/estacionamento) nas datas
     if (trip.transport_type === 'aéreo') {
-      const groundExpenses = expenses.filter((e) =>
-        ['uber_taxi', 'estacionamento', 'transporte'].includes(e.category),
+      // Palavras que indicam que a despesa é o próprio bilhete aéreo (transporte principal).
+      // "aeroporto" aparece naturalmente em bilhetes aéreos e NÃO é sinal de transporte aéreo nem terrestre.
+      const airMerchantKeywords = [
+        'latam',
+        'gol linhas',
+        'gol',
+        'voegol',
+        'azul linhas',
+        'voe azul',
+        'avianca',
+        'ita airways',
+        'copa airlines',
+        'aerolineas',
+        'aerolíneas',
+        'airlines',
+        'airline',
+        'linhas aéreas',
+        'linhas aereas',
+        'cia aérea',
+        'cia aerea',
+        'cvc',
+      ]
+      const airTextKeywords = [
+        'passagem',
+        'bilhete',
+        'aereo',
+        'aéreo',
+        'voo',
+        'vôo',
+        'boarding',
+        'e-ticket',
+        'eticket',
+        'localizador',
+        'trecho',
+        'flight',
+        'tarifa aérea',
+        'tarifa aerea',
+      ]
+      }
+
+      const groundExpenses = expenses.filter((e) => {
+        // O transporte principal (passagem aérea) NUNCA satisfaz "transporte terrestre para aeroporto"
+        if (isAirTravelExpense(e)) return false
+        if (e.category === 'uber_taxi' || e.category === 'estacionamento') return true
+        if (e.category === 'transporte') {
+          const merchant = (e.merchant_name || '').toLowerCase()
+          const text = (e.ocr_raw_text || '').toLowerCase()
+          return (
+            groundMerchantKeywords.some((k) => merchant.includes(k)) ||
+            groundTextKeywords.some((k) => text.includes(k))
+          )
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      }
+
+      const groundExpenses = expenses.filter((e) => {
+        // O transporte principal (passagem aérea) NUNCA satisfaz "transporte terrestre para aeroporto"
+        if (isAirTravelExpense(e)) return false
+        if (e.category === 'uber_taxi' || e.category === 'estacionamento') return true
+        if (e.category === 'transporte') {
+          const merchant = (e.merchant_name || '').toLowerCase()
+          const text = (e.ocr_raw_text || '').toLowerCase()
+          return (
+            groundMerchantKeywords.some((k) => merchant.includes(k)) ||
+            groundTextKeywords.some((k) => text.includes(k))
+          )
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+      }
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      }
+
+      const groundExpenses = expenses.filter((e) => {
+        // O transporte principal (passagem aérea) NUNCA satisfaz "transporte terrestre para aeroporto"
+        if (isAirTravelExpense(e)) return false
+        if (e.category === 'uber_taxi' || e.category === 'estacionamento') return true
+        if (e.category === 'transporte') {
+          const merchant = (e.merchant_name || '').toLowerCase()
+          const text = (e.ocr_raw_text || '').toLowerCase()
+          return (
+            groundMerchantKeywords.some((k) => merchant.includes(k)) ||
+            groundTextKeywords.some((k) => text.includes(k))
+          )
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+      }
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      }
+
+      const groundExpenses = expenses.filter((e) => {
+        // O transporte principal (passagem aérea) NUNCA satisfaz "transporte terrestre para aeroporto"
+        if (isAirTravelExpense(e)) return false
+        if (e.category === 'uber_taxi' || e.category === 'estacionamento') return true
+        if (e.category === 'transporte') {
+          const merchant = (e.merchant_name || '').toLowerCase()
+          const text = (e.ocr_raw_text || '').toLowerCase()
+          return (
+            groundMerchantKeywords.some((k) => merchant.includes(k)) ||
+            groundTextKeywords.some((k) => text.includes(k))
+          )
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+        rules.push({
+          key: 'voo_sem_transporte_aeroporto',
+          title: 'Transporte Terrestre para Aeroporto',
+          message:
+            'Viagem aérea detectada — não há comprovante de transporte terrestre (Uber/Táxi/Estacionamento) registrado no período. Adicione o comprovante ou justifique.',
+          severity: 'warning',
+          status: existingLog?.status === 'justified' ? 'justified' : 'warning',
+          justification: existingLog?.message,
+        })
+      } else {
+        rules.push({
+          key: 'voo_sem_transporte_aeroporto',
+          title: 'Transporte Terrestre para Aeroporto',
+          message: `${groundExpenses.length} comprovante(s) de transporte terrestre/Uber identificado(s) com sucesso.`,
+          severity: 'pass',
+          status: 'pass',
+        })
+      }
+    }
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      }
+
+      const groundExpenses = expenses.filter((e) => {
+        // O transporte principal (passagem aérea) NUNCA satisfaz "transporte terrestre para aeroporto"
+        if (isAirTravelExpense(e)) return false
+        if (e.category === 'uber_taxi' || e.category === 'estacionamento') return true
+        if (e.category === 'transporte') {
+          const merchant = (e.merchant_name || '').toLowerCase()
+          const text = (e.ocr_raw_text || '').toLowerCase()
+          return (
+            groundMerchantKeywords.some((k) => merchant.includes(k)) ||
+            groundTextKeywords.some((k) => text.includes(k))
+          )
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+      }
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      }
+
+      const groundExpenses = expenses.filter((e) => {
+        // O transporte principal (passagem aérea) NUNCA satisfaz "transporte terrestre para aeroporto"
+        if (isAirTravelExpense(e)) return false
+        if (e.category === 'uber_taxi' || e.category === 'estacionamento') return true
+        if (e.category === 'transporte') {
+          const merchant = (e.merchant_name || '').toLowerCase()
+          const text = (e.ocr_raw_text || '').toLowerCase()
+          return (
+            groundMerchantKeywords.some((k) => merchant.includes(k)) ||
+            groundTextKeywords.some((k) => text.includes(k))
+          )
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+      }
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      }
+
+      const groundExpenses = expenses.filter((e) => {
+        // O transporte principal (passagem aérea) NUNCA satisfaz "transporte terrestre para aeroporto"
+        if (isAirTravelExpense(e)) return false
+        if (e.category === 'uber_taxi' || e.category === 'estacionamento') return true
+        if (e.category === 'transporte') {
+          const merchant = (e.merchant_name || '').toLowerCase()
+          const text = (e.ocr_raw_text || '').toLowerCase()
+          return (
+            groundMerchantKeywords.some((k) => merchant.includes(k)) ||
+            groundTextKeywords.some((k) => text.includes(k))
+          )
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      }
+
+      const groundExpenses = expenses.filter((e) => {
+        // O transporte principal (passagem aérea) NUNCA satisfaz "transporte terrestre para aeroporto"
+        if (isAirTravelExpense(e)) return false
+        if (e.category === 'uber_taxi' || e.category === 'estacionamento') return true
+        if (e.category === 'transporte') {
+          const merchant = (e.merchant_name || '').toLowerCase()
+          const text = (e.ocr_raw_text || '').toLowerCase()
+          return (
+            groundMerchantKeywords.some((k) => merchant.includes(k)) ||
+            groundTextKeywords.some((k) => text.includes(k))
+          )
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+      }
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      }
+
+      const groundExpenses = expenses.filter((e) => {
+        // O transporte principal (passagem aérea) NUNCA satisfaz "transporte terrestre para aeroporto"
+        if (isAirTravelExpense(e)) return false
+        if (e.category === 'uber_taxi' || e.category === 'estacionamento') return true
+        if (e.category === 'transporte') {
+          const merchant = (e.merchant_name || '').toLowerCase()
+          const text = (e.ocr_raw_text || '').toLowerCase()
+          return (
+            groundMerchantKeywords.some((k) => merchant.includes(k)) ||
+            groundTextKeywords.some((k) => text.includes(k))
+          )
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+      }
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      }
+
+      const groundExpenses = expenses.filter((e) => {
+        // O transporte principal (passagem aérea) NUNCA satisfaz "transporte terrestre para aeroporto"
+        if (isAirTravelExpense(e)) return false
+        if (e.category === 'uber_taxi' || e.category === 'estacionamento') return true
+        if (e.category === 'transporte') {
+          const merchant = (e.merchant_name || '').toLowerCase()
+          const text = (e.ocr_raw_text || '').toLowerCase()
+          return (
+            groundMerchantKeywords.some((k) => merchant.includes(k)) ||
+            groundTextKeywords.some((k) => text.includes(k))
+          )
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+        rules.push({
+          key: 'voo_sem_transporte_aeroporto',
+          title: 'Transporte Terrestre para Aeroporto',
+          message:
+            'Viagem aérea detectada — não há comprovante de transporte terrestre (Uber/Táxi/Estacionamento) registrado no período. Adicione o comprovante ou justifique.',
+          severity: 'warning',
+          status: existingLog?.status === 'justified' ? 'justified' : 'warning',
+          justification: existingLog?.message,
+        })
+      } else {
+        rules.push({
+          key: 'voo_sem_transporte_aeroporto',
+          title: 'Transporte Terrestre para Aeroporto',
+          message: `${groundExpenses.length} comprovante(s) de transporte terrestre/Uber identificado(s) com sucesso.`,
+          severity: 'pass',
+          status: 'pass',
+        })
+      }
+    }
+=======
+      }
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+        rules.push({
+          key: 'voo_sem_transporte_aeroporto',
+          title: 'Transporte Terrestre para Aeroporto',
+          message:
+            'Viagem aérea detectada — não há comprovante de transporte terrestre (Uber/Táxi/Estacionamento) registrado no período. Adicione o comprovante ou justifique.',
+          severity: 'warning',
+          status: existingLog?.status === 'justified' ? 'justified' : 'warning',
+          justification: existingLog?.message,
+        })
+      } else {
+        rules.push({
+          key: 'voo_sem_transporte_aeroporto',
+          title: 'Transporte Terrestre para Aeroporto',
+          message: `${groundExpenses.length} comprovante(s) de transporte terrestre/Uber identificado(s) com sucesso.`,
+          severity: 'pass',
+          status: 'pass',
+        })
+      }
+    }
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      }
+
+      const groundExpenses = expenses.filter((e) => {
+        // O transporte principal (passagem aérea) NUNCA satisfaz "transporte terrestre para aeroporto"
+        if (isAirTravelExpense(e)) return false
+        if (e.category === 'uber_taxi' || e.category === 'estacionamento') return true
+        if (e.category === 'transporte') {
+          const merchant = (e.merchant_name || '').toLowerCase()
+          const text = (e.ocr_raw_text || '').toLowerCase()
+          return (
+            groundMerchantKeywords.some((k) => merchant.includes(k)) ||
+            groundTextKeywords.some((k) => text.includes(k))
+          )
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+      }
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      }
+
+      const groundExpenses = expenses.filter((e) => {
+        // O transporte principal (passagem aérea) NUNCA satisfaz "transporte terrestre para aeroporto"
+        if (isAirTravelExpense(e)) return false
+        if (e.category === 'uber_taxi' || e.category === 'estacionamento') return true
+        if (e.category === 'transporte') {
+          const merchant = (e.merchant_name || '').toLowerCase()
+          const text = (e.ocr_raw_text || '').toLowerCase()
+          return (
+            groundMerchantKeywords.some((k) => merchant.includes(k)) ||
+            groundTextKeywords.some((k) => text.includes(k))
+          )
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+      }
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
       )
       const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
 

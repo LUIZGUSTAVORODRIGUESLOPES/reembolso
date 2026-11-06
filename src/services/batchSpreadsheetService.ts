@@ -60,8 +60,17 @@ export interface MatchEvaluationResult {
   metadataNote?: string
 }
 
-// Taxa canônica do Reembolso.ai para conversão de pontos/milhas
-export const POINT_CONVERSION_RATE = 0.017
+import { appSettingsService, DEFAULT_AZUL_POINT_RATE } from './appSettingsService'
+
+// Taxa padrão canônica do Reembolso.ai para conversão de pontos/milhas (mantida para compatibilidade de tipos/testes)
+export const POINT_CONVERSION_RATE = DEFAULT_AZUL_POINT_RATE
+
+/**
+ * Retorna a taxa dinâmica atual de conversão configurada no sistema.
+ */
+export function getActivePointConversionRate(): number {
+  return appSettingsService.getPointRateSync()
+}
 
 /**
  * Normaliza nome de arquivo para comparação insensível a maiúsculas/minúsculas e espaços extras.
@@ -345,8 +354,9 @@ function mapRawRecordToSpreadsheetRow(record: Record<string, any>): SpreadsheetE
   const category = mapClassificationToCategory(classificacao)
   const dataIso = parseDateToIso(data)
 
+  const activeRate = getActivePointConversionRate()
   const valorTaxaEmbarque = valorTotal
-  const valorConvertidoPontos = pontos > 0 ? Number((pontos * POINT_CONVERSION_RATE).toFixed(2)) : 0
+  const valorConvertidoPontos = pontos > 0 ? Number((pontos * activeRate).toFixed(2)) : 0
   const valorFinalCalculado =
     pontos > 0 ? Number((valorTaxaEmbarque + valorConvertidoPontos).toFixed(2)) : valorTotal
   const formaPagamento: 'Pontos + Taxas' | 'Dinheiro' = pontos > 0 ? 'Pontos + Taxas' : 'Dinheiro'

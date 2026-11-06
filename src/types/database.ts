@@ -26,6 +26,14 @@ export type AuditFlag =
 
 export type UserRole = 'admin' | 'solicitante'
 
+export interface AppSettings {
+  id: string
+  azul_point_rate: number
+  description?: string | null
+  updated_at: string
+  updated_by?: string | null
+}
+
 export interface Profile {
   id: string
   email: string

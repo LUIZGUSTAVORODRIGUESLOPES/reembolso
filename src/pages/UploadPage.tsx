@@ -27,6 +27,7 @@ import {
   evaluateReceiptAgainstSpreadsheet,
   MatchEvaluationResult,
 } from '@/services/batchSpreadsheetService'
+import { appSettingsService } from '@/services/appSettingsService'
 import { storageService } from '@/services/storageService'
 import { Expense, Trip } from '@/types/database'
 import { formatCurrencyBRL, formatDateBR, CATEGORY_LABELS, CATEGORY_COLORS } from '@/lib/formatters'
@@ -76,6 +77,11 @@ export default function UploadPage() {
   const [currentProcessingFile, setCurrentProcessingFile] = useState<string | null>(null)
   const [currentStepMessage, setCurrentStepMessage] = useState<string>('')
   const [aiSuggestions, setAiSuggestions] = useState<AiTripSuggestion[]>([])
+
+  // Carrega configurações gerais do sistema (como a taxa Azul) ao montar
+  useEffect(() => {
+    appSettingsService.getAzulPointRate().catch(() => {})
+  }, [])
 
   // Estado para detecção de planilha de referência no lote
   const [spreadsheetFile, setSpreadsheetFile] = useState<File | null>(null)

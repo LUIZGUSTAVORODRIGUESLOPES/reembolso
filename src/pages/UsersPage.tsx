@@ -28,6 +28,8 @@ import { Switch } from '@/components/ui/switch'
 import { userService } from '@/services/userService'
 import { reminderTriggerService, ReminderCheckResult } from '@/services/reminderTriggerService'
 import { Profile, UserRole } from '@/types/database'
+import { appSettingsService, DEFAULT_AZUL_POINT_RATE } from '@/services/appSettingsService'
+import { Coins } from 'lucide-react'
 import { useAuth } from '@/hooks/use-auth'
 import { useToast } from '@/hooks/use-toast'
 import { formatDateBR } from '@/lib/formatters'
@@ -98,6 +100,13 @@ export default function UsersPage() {
   // Modal para exibir o resultado detalhado da simulação (dry-run)
   const [simulationResult, setSimulationResult] = useState<ReminderCheckResult | null>(null)
 
+  // Configurações do Sistema: Taxa de conversão de pontos/milhas Azul
+  const [pointRateInput, setPointRateInput] = useState<string>('0,0170')
+  const [currentPointRate, setCurrentPointRate] = useState<number>(0.017)
+  const [pointRateUpdatedAt, setPointRateUpdatedAt] = useState<string | null>(null)
+  const [savingPointRate, setSavingPointRate] = useState<boolean>(false)
+  const [loadingPointRate, setLoadingPointRate] = useState<boolean>(true)
+
   const loadUsers = async () => {
     try {
       setLoading(true)
@@ -114,10 +123,67 @@ export default function UsersPage() {
     }
   }
 
+  const loadPointRateSettings = async () => {
+    try {
+      setLoadingPointRate(true)
+      const settings = await appSettingsService.getSettings()
+      const rate = settings.azul_point_rate || DEFAULT_AZUL_POINT_RATE
+      setCurrentPointRate(rate)
+      // Formata em pt-BR com até 4 casas decimais
+      setPointRateInput(rate.toFixed(4).replace('.', ','))
+      setPointRateUpdatedAt(settings.updated_at)
+    } catch (err: any) {
+      console.warn('Erro ao carregar app_settings:', err)
+      setCurrentPointRate(DEFAULT_AZUL_POINT_RATE)
+      setPointRateInput('0,0170')
+    } finally {
+      setLoadingPointRate(false)
+    }
+  }
+
   useEffect(() => {
     if (authLoading) return
     loadUsers()
+    loadPointRateSettings()
   }, [authLoading, currentUser?.id])
+
+  const handleSavePointRate = async (e: React.FormEvent) => {
+    e.preventDefault()
+    // Validação com suporte a vírgula pt-BR
+    const cleanStr = pointRateInput.trim().replace(',', '.')
+    const parsedRate = parseFloat(cleanStr)
+
+    if (isNaN(parsedRate) || parsedRate <= 0) {
+      toast({
+        title: 'Valor inválido',
+        description:
+          'Informe um valor numérico positivo para a taxa de conversão (ex: 0,0170 ou 0,0225).',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    try {
+      setSavingPointRate(true)
+      const savedRate = await appSettingsService.updateAzulPointRate(parsedRate, currentUser?.id)
+      setCurrentPointRate(savedRate)
+      setPointRateInput(savedRate.toFixed(4).replace('.', ','))
+      setPointRateUpdatedAt(new Date().toISOString())
+
+      toast({
+        title: 'Taxa atualizada com sucesso!',
+        description: `O novo padrão de conversão Azul é R$ ${savedRate.toFixed(4).replace('.', ',')} por ponto/milha. Novas despesas calcularão com este valor.`,
+      })
+    } catch (err: any) {
+      toast({
+        title: 'Erro ao salvar taxa',
+        description: err?.message || 'Falha ao atualizar a taxa no banco.',
+        variant: 'destructive',
+      })
+    } finally {
+      setSavingPointRate(false)
+    }
+  }
 
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -512,6 +578,131 @@ export default function UsersPage() {
           </Button>
         </div>
       </div>
+
+      {/* Seção de Configurações do Sistema: Conversão de Pontos / Milhas Azul */}
+      <Card className="border-blue-200 bg-gradient-to-br from-blue-50/60 via-white to-indigo-50/40 shadow-sm overflow-hidden">
+        <CardHeader className="pb-3 border-b border-blue-100/70">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-lg bg-blue-600 text-white flex items-center justify-center shadow-xs">
+                <Coins className="w-5 h-5 text-amber-300" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <CardTitle className="text-sm sm:text-base font-bold text-slate-900">
+                    Taxa Padrão de Conversão de Pontos / Milhas Azul
+                  </CardTitle>
+                  <Badge className="bg-blue-100 text-blue-800 border-blue-300 text-[10px] font-semibold gap-1">
+                    <Sparkles className="w-3 h-3 text-blue-600" />
+                    Parâmetro Global
+                  </Badge>
+                </div>
+                <CardDescription className="text-xs text-slate-600 mt-0.5">
+                  Valor em Reais (R$) por ponto/milha para despesas com a forma de pagamento{' '}
+                  <strong>"Pontos + Taxas"</strong> (passagens Azul).
+                </CardDescription>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <div className="text-right">
+                <span className="text-[11px] text-slate-500 block">Taxa ativa no sistema</span>
+                <span className="text-sm font-bold text-blue-900 tabular-nums">
+                  {loadingPointRate
+                    ? 'Carregando...'
+                    : `R$ ${currentPointRate.toFixed(4).replace('.', ',')} / ponto`}
+                </span>
+              </div>
+            </div>
+          </div>
+        </CardHeader>
+
+        <CardContent className="pt-4 pb-4">
+          <form
+            onSubmit={handleSavePointRate}
+            className="flex flex-col md:flex-row md:items-end gap-3.5"
+          >
+            <div className="w-full sm:w-64 space-y-1.5">
+              <Label
+                htmlFor="azul-point-rate-input"
+                className="text-xs font-semibold text-slate-700 flex items-center justify-between"
+              >
+                <span>Novo valor da taxa (R$ / ponto)</span>
+                <span className="text-[10px] text-slate-400 font-normal">Aceita vírgula</span>
+              </Label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
+                  R$
+                </span>
+                <Input
+                  id="azul-point-rate-input"
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="0,0170"
+                  value={pointRateInput}
+                  onChange={(e) => setPointRateInput(e.target.value)}
+                  disabled={savingPointRate || loadingPointRate}
+                  className="pl-9 h-9 text-xs font-bold tabular-nums bg-white border-slate-300 focus-visible:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex-1 text-[11px] text-slate-500 leading-relaxed bg-white/70 border border-slate-200 rounded-lg p-2.5">
+              <p>
+                <strong>Como funciona o cálculo:</strong> Se uma passagem Azul custou{' '}
+                <strong>10.000 pontos</strong> + <strong>R$ 45,00</strong> em taxas de embarque, o
+                valor total reembolsável será calculado como{' '}
+                <span className="text-blue-700 font-semibold font-mono">
+                  R$ 45,00 + (10.000 × {pointRateInput.trim() || '0,0170'}) = R${' '}
+                  {((parseFloat(pointRateInput.replace(',', '.')) || 0.017) * 10000 + 45)
+                    .toFixed(2)
+                    .replace('.', ',')}
+                </span>
+                .
+              </p>
+              {pointRateUpdatedAt && (
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Última atualização registrada:{' '}
+                  {new Date(pointRateUpdatedAt).toLocaleString('pt-BR')}
+                </p>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setPointRateInput('0,0170')}
+                disabled={savingPointRate || loadingPointRate || pointRateInput === '0,0170'}
+                title="Restaura para a taxa histórica padrão de R$ 0,0170"
+                className="text-xs h-9 text-slate-600 border-slate-300 hover:bg-slate-100"
+              >
+                Padrão (0,0170)
+              </Button>
+
+              <Button
+                type="submit"
+                size="sm"
+                disabled={savingPointRate || loadingPointRate}
+                className="bg-[#1e40af] hover:bg-[#1d3d9e] text-white text-xs h-9 gap-1.5 shadow-sm min-w-[130px]"
+              >
+                {savingPointRate ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Salvando taxa...
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    Salvar Taxa Azul
+                  </>
+                )}
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

@@ -130,7 +130,7 @@ export default function Layout() {
     { path: '/upload', label: 'Upload de Comprovantes', icon: UploadCloud },
     { path: '/triage', label: 'Triagem & OCR', icon: FileCheck2 },
     { path: '/reports', label: 'Relatórios & Prestação', icon: FileSpreadsheet },
-    ...(isAdmin ? [{ path: '/usuarios', label: 'Gestão de Usuários', icon: Users }] : []),
+    ...(isAdmin ? [{ path: '/usuarios', label: 'Usuários & Configurações', icon: Users }] : []),
   ]
 
   const refreshAlertCount = async () => {
@@ -173,7 +173,7 @@ export default function Layout() {
     if (path === '/upload') return ['Dashboard', 'Upload em Lote']
     if (path === '/triage') return ['Dashboard', 'Triagem & OCR']
     if (path === '/reports') return ['Dashboard', 'Relatórios']
-    if (path === '/usuarios') return ['Dashboard', 'Gestão de Usuários']
+    if (path === '/usuarios') return ['Dashboard', 'Usuários & Configurações']
     return ['Dashboard']
   }
 
@@ -186,7 +186,7 @@ export default function Layout() {
     if (path === '/upload') return 'Upload em Lote com OCR'
     if (path === '/triage') return 'Triagem & Conferência'
     if (path === '/reports') return 'Prestação de Contas & Relatórios'
-    if (path === '/usuarios') return 'Controle de Usuários e Perfis'
+    if (path === '/usuarios') return 'Usuários & Parâmetros do Sistema'
     return 'Reembolso.ai'
   }
 

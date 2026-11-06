@@ -96,6 +96,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/hooks/use-toast'
 import { Switch } from '@/components/ui/switch'
+import { appSettingsService, DEFAULT_AZUL_POINT_RATE } from '@/services/appSettingsService'
 import {
   parseBrazilianReceiptText,
   processRealReceiptOcr,
@@ -148,7 +149,28 @@ export default function TripDetailPage() {
   const [newExpUseMiles, setNewExpUseMiles] = useState(false)
   const [newExpCashStr, setNewExpCashStr] = useState('')
   const [newExpPointsStr, setNewExpPointsStr] = useState('')
-  const [newExpMileRateStr, setNewExpMileRateStr] = useState('0.017')
+  const [newExpMileRateStr, setNewExpMileRateStr] = useState(
+    String(appSettingsService.getPointRateSync()),
+  )
+  const [systemPointRate, setSystemPointRate] = useState<number>(
+    appSettingsService.getPointRateSync(),
+  )
+
+  useEffect(() => {
+    let mounted = true
+    appSettingsService
+      .getAzulPointRate()
+      .then((rate) => {
+        if (!mounted) return
+        setSystemPointRate(rate)
+        setNewExpMileRateStr((prev) => (prev === '0.017' ? String(rate) : prev))
+        setEditExpMileRateStr((prev) => (prev === '0.017' ? String(rate) : prev))
+      })
+      .catch(() => {})
+    return () => {
+      mounted = false
+    }
+  }, [])
 
   const ALLOWED_MIME_TYPES = [
     'application/pdf',
@@ -212,7 +234,13 @@ export default function TripDetailPage() {
               if (ocrRes.amount) {
                 setNewExpCashStr(ocrRes.amount.toFixed(2))
               }
-              setNewExpMileRateStr('0.017')
+              setNewExpMileRateStr(
+                String(
+                  appSettingsService.getPointRateSync() ||
+                    systemPointRate ||
+                    DEFAULT_AZUL_POINT_RATE,
+                ),
+              )
             }
           }
         })
@@ -280,7 +308,9 @@ export default function TripDetailPage() {
   const [editExpUseMiles, setEditExpUseMiles] = useState(false)
   const [editExpCashStr, setEditExpCashStr] = useState('')
   const [editExpPointsStr, setEditExpPointsStr] = useState('')
-  const [editExpMileRateStr, setEditExpMileRateStr] = useState('0.017')
+  const [editExpMileRateStr, setEditExpMileRateStr] = useState(
+    String(appSettingsService.getPointRateSync()),
+  )
 
   // Multi-receipt state for Edit Expense Modal
   const [editMultiReceiptActive, setEditMultiReceiptActive] = useState(false)
@@ -586,7 +616,9 @@ export default function TripDetailPage() {
       setNewExpUseMiles(false)
       setNewExpCashStr('')
       setNewExpPointsStr('')
-      setNewExpMileRateStr('0.017')
+      setNewExpMileRateStr(
+        String(appSettingsService.getPointRateSync() || systemPointRate || DEFAULT_AZUL_POINT_RATE),
+      )
       setSelectedReceiptFile(null)
       setFileError(null)
       loadTripData()
@@ -697,12 +729,16 @@ export default function TripDetailPage() {
       setEditExpUseMiles(true)
       setEditExpPointsStr(String(pts))
       setEditExpCashStr(String(parsed?.amount || exp.amount))
-      setEditExpMileRateStr('0.017')
+      setEditExpMileRateStr(
+        String(appSettingsService.getPointRateSync() || systemPointRate || DEFAULT_AZUL_POINT_RATE),
+      )
     } else {
       setEditExpUseMiles(false)
       setEditExpPointsStr('')
       setEditExpCashStr(String(exp.amount))
-      setEditExpMileRateStr('0.017')
+      setEditExpMileRateStr(
+        String(appSettingsService.getPointRateSync() || systemPointRate || DEFAULT_AZUL_POINT_RATE),
+      )
     }
 
     loadAvailableTrips()
@@ -2329,7 +2365,13 @@ export default function TripDetailPage() {
               setNewExpUseMiles(false)
               setNewExpCashStr('')
               setNewExpPointsStr('')
-              setNewExpMileRateStr('0.017')
+              setNewExpMileRateStr(
+                String(
+                  appSettingsService.getPointRateSync() ||
+                    systemPointRate ||
+                    DEFAULT_AZUL_POINT_RATE,
+                ),
+              )
             }
           }
         }}
@@ -2607,11 +2649,11 @@ export default function TripDetailPage() {
                             </span>
                             <Input
                               type="number"
-                              step="0.001"
+                              step="0.0001"
                               min="0"
                               value={newExpMileRateStr}
                               onChange={(e) => setNewExpMileRateStr(e.target.value)}
-                              placeholder="0.017"
+                              placeholder={String(systemPointRate || DEFAULT_AZUL_POINT_RATE)}
                               className="pl-8 text-xs font-semibold tabular-nums bg-white"
                             />
                           </div>
@@ -2621,7 +2663,10 @@ export default function TripDetailPage() {
                       {(() => {
                         const parsedCash = parseFloat(newExpCashStr.replace(',', '.')) || 0
                         const parsedPts = parseFloat(newExpPointsStr.replace(',', '.')) || 0
-                        const parsedRate = parseFloat(newExpMileRateStr.replace(',', '.')) || 0.017
+                        const parsedRate =
+                          parseFloat(newExpMileRateStr.replace(',', '.')) ||
+                          systemPointRate ||
+                          DEFAULT_AZUL_POINT_RATE
                         const suggested = parseFloat(
                           (parsedCash + parsedPts * parsedRate).toFixed(2),
                         )
@@ -3299,11 +3344,11 @@ export default function TripDetailPage() {
                           </span>
                           <Input
                             type="number"
-                            step="0.001"
+                            step="0.0001"
                             min="0"
                             value={editExpMileRateStr}
                             onChange={(e) => setEditExpMileRateStr(e.target.value)}
-                            placeholder="0.017"
+                            placeholder={String(systemPointRate || DEFAULT_AZUL_POINT_RATE)}
                             className="pl-8 text-xs font-semibold tabular-nums bg-white"
                           />
                         </div>
@@ -3313,7 +3358,10 @@ export default function TripDetailPage() {
                     {(() => {
                       const parsedCash = parseFloat(editExpCashStr.replace(',', '.')) || 0
                       const parsedPts = parseFloat(editExpPointsStr.replace(',', '.')) || 0
-                      const parsedRate = parseFloat(editExpMileRateStr.replace(',', '.')) || 0.017
+                      const parsedRate =
+                        parseFloat(editExpMileRateStr.replace(',', '.')) ||
+                        systemPointRate ||
+                        DEFAULT_AZUL_POINT_RATE
                       const suggested = parseFloat((parsedCash + parsedPts * parsedRate).toFixed(2))
 
                       return (

@@ -61,6 +61,7 @@ import {
 import { useToast } from '@/hooks/use-toast'
 import { showExpenseDeletedUndoToast } from '@/services/undoService'
 import { useAuth } from '@/hooks/use-auth'
+import { appSettingsService, DEFAULT_AZUL_POINT_RATE } from '@/services/appSettingsService'
 import { CreateTripModal } from '@/components/CreateTripModal'
 import { DocumentViewer } from '@/components/DocumentViewer'
 import { TripSelectorWithUnlock } from '@/components/TripSelectorWithUnlock'
@@ -92,7 +93,25 @@ export default function TriagePage() {
   const [useMiles, setUseMiles] = useState(false)
   const [cashAmountStr, setCashAmountStr] = useState('')
   const [pointsUsedStr, setPointsUsedStr] = useState('')
-  const [mileRateStr, setMileRateStr] = useState('0.017')
+  const [mileRateStr, setMileRateStr] = useState(String(appSettingsService.getPointRateSync()))
+  const [systemPointRate, setSystemPointRate] = useState<number>(
+    appSettingsService.getPointRateSync(),
+  )
+
+  useEffect(() => {
+    let mounted = true
+    appSettingsService
+      .getAzulPointRate()
+      .then((rate) => {
+        if (!mounted) return
+        setSystemPointRate(rate)
+        setMileRateStr((prev) => (prev === '0.017' ? String(rate) : prev))
+      })
+      .catch(() => {})
+    return () => {
+      mounted = false
+    }
+  }, [])
 
   // Multi-receipt and PDF pages state
   const [docPageInfo, setDocPageInfo] = useState<{ isPdf: boolean; totalPages: number }>({
@@ -185,7 +204,9 @@ export default function TriagePage() {
       setUseMiles(false)
       setCashAmountStr('')
       setPointsUsedStr('')
-      setMileRateStr('0.017')
+      setMileRateStr(
+        String(appSettingsService.getPointRateSync() || systemPointRate || DEFAULT_AZUL_POINT_RATE),
+      )
       return
     }
 
@@ -261,17 +282,19 @@ export default function TriagePage() {
     setAmountStr(initialAmount)
 
     // Detecção híbrida de pontos/milhas
+    const currentRate =
+      appSettingsService.getPointRateSync() || systemPointRate || DEFAULT_AZUL_POINT_RATE
     const detectedPoints = parsedFallback?.points_applied || 0
     if (detectedPoints > 0) {
       setUseMiles(initialCategory === 'transporte')
       setPointsUsedStr(String(detectedPoints))
       setCashAmountStr(initialAmount)
-      setMileRateStr('0.017')
+      setMileRateStr(String(currentRate))
     } else {
       setUseMiles(false)
       setPointsUsedStr('')
       setCashAmountStr(initialAmount)
-      setMileRateStr('0.017')
+      setMileRateStr(String(currentRate))
     }
 
     // Reset multi-receipt panel states for newly selected expense
@@ -1088,11 +1111,11 @@ export default function TriagePage() {
                             </span>
                             <Input
                               type="number"
-                              step="0.001"
+                              step="0.0001"
                               min="0"
                               value={mileRateStr}
                               onChange={(e) => setMileRateStr(e.target.value)}
-                              placeholder="0.017"
+                              placeholder={String(systemPointRate || DEFAULT_AZUL_POINT_RATE)}
                               className="pl-8 text-xs font-semibold tabular-nums bg-white"
                             />
                           </div>
@@ -1103,7 +1126,10 @@ export default function TriagePage() {
                       {(() => {
                         const parsedCash = parseFloat(cashAmountStr.replace(',', '.')) || 0
                         const parsedPts = parseFloat(pointsUsedStr.replace(',', '.')) || 0
-                        const parsedRate = parseFloat(mileRateStr.replace(',', '.')) || 0.017
+                        const parsedRate =
+                          parseFloat(mileRateStr.replace(',', '.')) ||
+                          systemPointRate ||
+                          DEFAULT_AZUL_POINT_RATE
                         const suggested = parseFloat(
                           (parsedCash + parsedPts * parsedRate).toFixed(2),
                         )

@@ -1068,6 +1068,120 @@ class SupabaseStorageService {
         'cia aerea',
         'cvc',
       ]
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      }
+=======
+      const isAirTravelExpense = (e: Expense) => {
+        const merchant = (e.merchant_name || '').toLowerCase()
+        const text = (e.ocr_raw_text || '').toLowerCase()
+        return (
+          airMerchantKeywords.some((k) => merchant.includes(k)) ||
+          airTextKeywords.some((k) => text.includes(k))
+        )
+      }
+
+      const groundMerchantKeywords = ['uber', '99', 'taxi', 'táxi', 'estacionamento', 'estapar', 'aeropark']
+      const groundTextKeywords = ['uber', 'corrida', 'motorista', 'estacionamento', 'estapar', 'garagem', 'táxi', 'taxi', 'aeropark', 'embarque']
+
+      const groundExpenses = expenses.filter((e) => {
+        // O transporte principal (passagem aérea) NUNCA satisfaz "transporte terrestre para aeroporto"
+        if (isAirTravelExpense(e)) return false
+        if (e.category === 'uber_taxi' || e.category === 'estacionamento') return true
+        if (e.category === 'transporte') {
+          const merchant = (e.merchant_name || '').toLowerCase()
+          const text = (e.ocr_raw_text || '').toLowerCase()
+          return (
+            groundMerchantKeywords.some((k) => merchant.includes(k)) ||
+            groundTextKeywords.some((k) => text.includes(k))
+          )
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+        rules.push({
+          key: 'voo_sem_transporte_aeroporto',
+          title: 'Transporte Terrestre para Aeroporto',
+          message:
+            'Viagem aérea detectada — não há comprovante de transporte terrestre (Uber/Táxi/Estacionamento) registrado no período. Adicione o comprovante ou justifique.',
+          severity: 'warning',
+          status: existingLog?.status === 'justified' ? 'justified' : 'warning',
+          justification: existingLog?.message,
+        })
+      } else {
+        rules.push({
+          key: 'voo_sem_transporte_aeroporto',
+          title: 'Transporte Terrestre para Aeroporto',
+          message: `${groundExpenses.length} comprovante(s) de transporte terrestre/Uber identificado(s) com sucesso.`,
+          severity: 'pass',
+          status: 'pass',
+        })
+      }
+    }
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      }
+
+      const groundExpenses = expenses.filter((e) => {
+        // O transporte principal (passagem aérea) NUNCA satisfaz "transporte terrestre para aeroporto"
+        if (isAirTravelExpense(e)) return false
+        if (e.category === 'uber_taxi' || e.category === 'estacionamento') return true
+        if (e.category === 'transporte') {
+          const merchant = (e.merchant_name || '').toLowerCase()
+          const text = (e.ocr_raw_text || '').toLowerCase()
+          return (
+            groundMerchantKeywords.some((k) => merchant.includes(k)) ||
+            groundTextKeywords.some((k) => text.includes(k))
+          )
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+=======
+      }
+=======
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+=======
+      )
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+        rules.push({
+          key: 'voo_sem_transporte_aeroporto',
+          title: 'Transporte Terrestre para Aeroporto',
+          message:
+            'Viagem aérea detectada — não há comprovante de transporte terrestre (Uber/Táxi/Estacionamento) registrado no período. Adicione o comprovante ou justifique.',
+          severity: 'warning',
+          status: existingLog?.status === 'justified' ? 'justified' : 'warning',
+          justification: existingLog?.message,
+        })
+      } else {
+        rules.push({
+          key: 'voo_sem_transporte_aeroporto',
+          title: 'Transporte Terrestre para Aeroporto',
+          message: `${groundExpenses.length} comprovante(s) de transporte terrestre/Uber identificado(s) com sucesso.`,
+          severity: 'pass',
+          status: 'pass',
+        })
+      }
+    }
+
+    // Regra 2: Viagem >= 2 dias sem comprovante de hospedagem
+=======
       const airTextKeywords = [
         'passagem',
         'bilhete',
@@ -1083,8 +1197,69 @@ class SupabaseStorageService {
         'flight',
         'tarifa aérea',
         'tarifa aerea',
+        'embarque',
       ]
 
+      const isAirTravelExpense = (e: Expense) => {
+        const merchant = (e.merchant_name || '').toLowerCase()
+        const text = (e.ocr_raw_text || '').toLowerCase()
+        return (
+          airMerchantKeywords.some((k) => merchant.includes(k)) ||
+          airTextKeywords.some((k) => text.includes(k))
+        )
+      }
+
+      const groundMerchantKeywords = ['uber', '99', 'taxi', 'táxi', 'estacionamento', 'estapar', 'aeropark']
+      const groundTextKeywords = [
+        'uber',
+        'corrida',
+        'motorista',
+        'estacionamento',
+        'estapar',
+        'garagem',
+        'táxi',
+        'taxi',
+        'aeropark',
+      ]
+
+      const groundExpenses = expenses.filter((e) => {
+        // O transporte principal (passagem aérea) NUNCA satisfaz "transporte terrestre para aeroporto"
+        if (isAirTravelExpense(e)) return false
+        if (e.category === 'uber_taxi' || e.category === 'estacionamento') return true
+        if (e.category === 'transporte') {
+          const merchant = (e.merchant_name || '').toLowerCase()
+          const text = (e.ocr_raw_text || '').toLowerCase()
+          return (
+            groundMerchantKeywords.some((k) => merchant.includes(k)) ||
+            groundTextKeywords.some((k) => text.includes(k))
+          )
+        }
+        return false
+      })
+      const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')
+
+      if (groundExpenses.length === 0) {
+        rules.push({
+          key: 'voo_sem_transporte_aeroporto',
+          title: 'Transporte Terrestre para Aeroporto',
+          message:
+            'Viagem aérea detectada — não há comprovante de transporte terrestre (Uber/Táxi/Estacionamento) registrado no período. Adicione o comprovante ou justifique.',
+          severity: 'warning',
+          status: existingLog?.status === 'justified' ? 'justified' : 'warning',
+          justification: existingLog?.message,
+        })
+      } else {
+        rules.push({
+          key: 'voo_sem_transporte_aeroporto',
+          title: 'Transporte Terrestre para Aeroporto',
+          message: `${groundExpenses.length} comprovante(s) de transporte terrestre/Uber identificado(s) com sucesso.`,
+          severity: 'pass',
+          status: 'pass',
+        })
+      }
+    }
+
+    // Regra 2: Viagem >= 2 dias sem comprovante de hospedagem
 =======
       )
       const existingLog = logs.find((l) => l.rule_key === 'voo_sem_transporte_aeroporto')

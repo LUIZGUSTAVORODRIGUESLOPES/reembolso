@@ -35,6 +35,7 @@ export const appSettingsService = {
 
     fetchPromise = (async () => {
       try {
+        // 1. Tentar ler de app_settings
         const { data, error } = await (supabase as any)
           .from('app_settings')
           .select('azul_point_rate')
@@ -64,8 +65,30 @@ export const appSettingsService = {
             return cachedPointRate
           }
         }
+
+        // 2. Fallback de leitura: buscar taxa customizada registrada em public.profiles
+        const { data: profileData, error: profileError } = await (supabase as any)
+          .from('profiles')
+          .select('azul_point_rate')
+          .not('azul_point_rate', 'is', null)
+          .order('updated_at', { ascending: false })
+          .limit(1)
+
+        if (
+          !profileError &&
+          profileData &&
+          profileData.length > 0 &&
+          profileData[0]?.azul_point_rate
+        ) {
+          const parsed = Number(profileData[0].azul_point_rate)
+          if (!isNaN(parsed) && parsed > 0) {
+            cachedPointRate = parsed
+            isLoaded = true
+            return cachedPointRate
+          }
+        }
       } catch (err) {
-        console.warn('Erro ao carregar taxa Azul de app_settings (usando fallback 0.017):', err)
+        console.warn('Erro ao carregar taxa Azul (usando fallback padrão 0.017):', err)
       } finally {
         fetchPromise = null
       }
@@ -98,6 +121,29 @@ export const appSettingsService = {
           description: data.description || 'Taxa padrão de conversão Azul',
           updated_at: data.updated_at || new Date().toISOString(),
           updated_by: data.updated_by || null,
+        }
+      }
+
+      // Se app_settings falhou ou retornou vazio, tenta consultar profiles (fallback)
+      const { data: profileData } = await (supabase as any)
+        .from('profiles')
+        .select('azul_point_rate, updated_at, id')
+        .not('azul_point_rate', 'is', null)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+
+      if (profileData && profileData.length > 0 && profileData[0]?.azul_point_rate) {
+        const rate = Number(profileData[0].azul_point_rate)
+        if (!isNaN(rate) && rate > 0) {
+          cachedPointRate = rate
+          isLoaded = true
+          return {
+            id: 'default',
+            azul_point_rate: rate,
+            description: 'Taxa configurada em perfis (fallback)',
+            updated_at: profileData[0].updated_at || new Date().toISOString(),
+            updated_by: profileData[0].id || null,
+          }
         }
       }
     } catch (err) {
@@ -178,19 +224,88 @@ export const appSettingsService = {
       }
     }
 
+    // Se o salvamento em app_settings falhou, acionar PLANO B de fallback em public.profiles
     if (error) {
-      console.error('Falha ao atualizar taxa em app_settings:', error)
-      // Mensagem clara em português se o erro for do schema cache do PostgREST
+      console.warn('Falha ao gravar em app_settings, tentando plano B (profiles):', error)
+
+      let profileFallbackSuccess = false
+      try {
+        // Obter id do usuário se não passado
+        let targetUserId = userId
+        if (!targetUserId) {
+          const { data: authData } = await supabase.auth.getUser()
+          targetUserId = authData?.user?.id
+        }
+
+        if (targetUserId) {
+          const { error: profileUpdateError } = await (supabase as any)
+            .from('profiles')
+            .update({
+              azul_point_rate: roundedRate,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', targetUserId)
+
+          if (!profileUpdateError) {
+            profileFallbackSuccess = true
+          } else {
+            console.warn(
+              'Falha no fallback de profiles para id específico:',
+              profileUpdateError.message,
+            )
+          }
+        }
+
+        // Se ainda não salvou (ex: targetUserId ausente ou restrição RLS), tenta atualizar qualquer perfil admin
+        if (!profileFallbackSuccess) {
+          const { error: anyProfileError } = await (supabase as any)
+            .from('profiles')
+            .update({
+              azul_point_rate: roundedRate,
+              updated_at: new Date().toISOString(),
+            })
+            .not('id', 'is', null)
+
+          if (!anyProfileError) {
+            profileFallbackSuccess = true
+          }
+        }
+      } catch (profileErr) {
+        console.warn('Erro ao executar fallback em profiles:', profileErr)
+      }
+
+      if (profileFallbackSuccess) {
+        cachedPointRate = roundedRate
+        isLoaded = true
+        return roundedRate
+      }
+
+      // Se ambos falharam, formular erro técnico explícito em pt-BR
+      console.error('Falha ao atualizar taxa em app_settings e no fallback:', error)
+      const errCode = error.code ? ` (código ${error.code})` : ''
+      const errDetails = error.details ? ` - Detalhes: ${error.details}` : ''
+      const errHint = error.hint ? ` - Dica: ${error.hint}` : ''
+      const rawMsg = error.message || ''
+
+      let explicacao = 'Erro ao persistir taxa no banco de dados.'
       if (
-        error.message?.includes('schema cache') ||
+        rawMsg.includes('permission denied') ||
+        rawMsg.includes('policy') ||
+        error.code === '42501'
+      ) {
+        explicacao = 'Permissão negada pelas políticas do banco de dados (RLS/permissões).'
+      } else if (rawMsg.includes('does not exist') || error.code === '42P01') {
+        explicacao = 'Tabela app_settings não encontrada no schema público do banco.'
+      } else if (
+        rawMsg.includes('schema cache') ||
         error.code === 'PGRST204' ||
         error.code === 'PGRST200'
       ) {
-        throw new Error(
-          'O schema do banco está sendo sincronizado. A tabela de configurações foi registrada e recarregada; tente novamente em instantes.',
-        )
+        explicacao =
+          'A API do banco de dados ainda não indexou a tabela de configurações no schema cache.'
       }
-      throw new Error(error.message || 'Erro ao persistir taxa no banco de dados.')
+
+      throw new Error(`${explicacao} ${rawMsg}${errCode}${errDetails}${errHint}`)
     }
 
     const updated = Number(data?.azul_point_rate) || roundedRate

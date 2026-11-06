@@ -176,18 +176,8 @@ export default function UsersPage() {
       })
     } catch (err: any) {
       const rawMsg: string = err?.message || ''
-      let friendlyMsg = rawMsg
-
-      if (
-        rawMsg.includes('schema cache') ||
-        rawMsg.includes('PGRST204') ||
-        rawMsg.includes('PGRST200')
-      ) {
-        friendlyMsg =
-          'O serviço do banco de dados está sincronizando a tabela de configurações. Aguarde alguns instantes e tente salvar novamente.'
-      } else if (!friendlyMsg) {
-        friendlyMsg = 'Não foi possível salvar o novo valor no banco de dados. Tente novamente.'
-      }
+      const friendlyMsg =
+        rawMsg || 'Não foi possível salvar o novo valor no banco de dados. Tente novamente.'
 
       toast({
         title: 'Erro ao salvar taxa',

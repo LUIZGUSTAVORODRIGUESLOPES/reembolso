@@ -121,11 +121,36 @@ export type Database = {
           },
         ]
       }
+      app_settings: {
+        Row: {
+          azul_point_rate: number
+          description: string | null
+          id: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          azul_point_rate?: number
+          description?: string | null
+          id?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          azul_point_rate?: number
+          description?: string | null
+          id?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           alert_unsent_trip_days: number
           alert_unsent_trip_enabled: boolean
           alert_unsent_trip_repeat_days: number
+          azul_point_rate: number | null
           created_at: string
           email: string
           full_name: string
@@ -138,6 +163,7 @@ export type Database = {
           alert_unsent_trip_days?: number
           alert_unsent_trip_enabled?: boolean
           alert_unsent_trip_repeat_days?: number
+          azul_point_rate?: number | null
           created_at?: string
           email?: string
           full_name?: string
@@ -150,6 +176,7 @@ export type Database = {
           alert_unsent_trip_days?: number
           alert_unsent_trip_enabled?: boolean
           alert_unsent_trip_repeat_days?: number
+          azul_point_rate?: number | null
           created_at?: string
           email?: string
           full_name?: string

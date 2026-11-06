@@ -46,6 +46,7 @@ export interface Profile {
   alert_unsent_trip_enabled?: boolean
   alert_unsent_trip_days?: number
   alert_unsent_trip_repeat_days?: number
+  azul_point_rate?: number | null
 }
 
 export type StandaloneRequestStatus = 'em_triagem' | 'empacotada' | 'quitada'

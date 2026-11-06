@@ -353,6 +353,73 @@ export default function TriagePage() {
     isMultiPagePdf && !currentExpenseDecision && !multiReceiptActive
 
   // Duplicate match details if flagged
+  // Extração de divergências registradas nas audit_flags
+  const sheetDivergences = useMemo(() => {
+    if (!currentExpense?.audit_flags) return []
+    const results: Array<{
+      field: 'date' | 'amount' | 'category'
+      label: string
+      sheetVal: string
+      ocrVal: string
+      rawSheet: string
+      rawOcr: string
+    }> = []
+
+    for (const flag of currentExpense.audit_flags) {
+      if (flag.startsWith('divergencia_ocr_data:')) {
+        const content = flag.replace('divergencia_ocr_data:', '')
+        const parts = content.split('|')
+        const sheetPart =
+          parts.find((p) => p.startsWith('planilha='))?.replace('planilha=', '') || ''
+        const ocrPart = parts.find((p) => p.startsWith('ocr='))?.replace('ocr=', '') || ''
+        results.push({
+          field: 'date',
+          label: 'Data de Emissão',
+          sheetVal: sheetPart ? formatDateBR(sheetPart) : sheetPart,
+          ocrVal: ocrPart === 'nao_detectada' ? 'Não detectada pelo OCR' : formatDateBR(ocrPart),
+          rawSheet: sheetPart,
+          rawOcr: ocrPart === 'nao_detectada' ? '' : ocrPart,
+        })
+      } else if (flag.startsWith('divergencia_ocr_valor:')) {
+        const content = flag.replace('divergencia_ocr_valor:', '')
+        const parts = content.split('|')
+        const sheetPart =
+          parts.find((p) => p.startsWith('planilha='))?.replace('planilha=', '') || ''
+        const ocrPart = parts.find((p) => p.startsWith('ocr='))?.replace('ocr=', '') || ''
+        const sheetNum = parseFloat(sheetPart)
+        const ocrNum = parseFloat(ocrPart)
+        results.push({
+          field: 'amount',
+          label: 'Valor Monetário',
+          sheetVal: !isNaN(sheetNum) ? formatCurrencyBRL(sheetNum) : sheetPart,
+          ocrVal:
+            ocrPart === 'nao_detectado'
+              ? 'Não detectado pelo OCR'
+              : !isNaN(ocrNum)
+                ? formatCurrencyBRL(ocrNum)
+                : ocrPart,
+          rawSheet: !isNaN(sheetNum) ? sheetNum.toFixed(2) : sheetPart,
+          rawOcr: !isNaN(ocrNum) ? ocrNum.toFixed(2) : ocrPart,
+        })
+      } else if (flag.startsWith('divergencia_ocr_categoria:')) {
+        const content = flag.replace('divergencia_ocr_categoria:', '')
+        const parts = content.split('|')
+        const sheetPart =
+          parts.find((p) => p.startsWith('planilha='))?.replace('planilha=', '') || ''
+        const ocrPart = parts.find((p) => p.startsWith('ocr='))?.replace('ocr=', '') || ''
+        results.push({
+          field: 'category',
+          label: 'Categoria',
+          sheetVal: CATEGORY_LABELS[sheetPart as ExpenseCategory] || sheetPart,
+          ocrVal: CATEGORY_LABELS[ocrPart as ExpenseCategory] || ocrPart,
+          rawSheet: sheetPart,
+          rawOcr: ocrPart,
+        })
+      }
+    }
+    return results
+  }, [currentExpense?.audit_flags])
+
   const isDuplicate = currentExpense?.audit_flags?.includes('comprovante_duplicado') || false
   const duplicateReference = useMemo(() => {
     if (!currentExpense || !isDuplicate) return null
@@ -455,6 +522,17 @@ export default function TriagePage() {
   // Check if current assigned trip is locked
   const assignedTrip = trips.find((t) => t.id === assignedTripId)
   const isAssignedTripLocked = assignedTrip ? storageService.isTripLocked(assignedTrip) : false
+
+  // Verificação de alertas da planilha de referência (data fora do período da viagem)
+  const isOutOfTripPeriod =
+    currentExpense?.audit_flags?.includes('alerta_data_fora_periodo_viagem') ||
+    Boolean(
+      currentExpense?.issue_date &&
+      assignedTrip?.start_date &&
+      assignedTrip?.end_date &&
+      (currentExpense.issue_date < assignedTrip.start_date ||
+        currentExpense.issue_date > assignedTrip.end_date),
+    )
 
   const handleDeleteExpense = async () => {
     if (!currentExpense) return
@@ -631,6 +709,20 @@ export default function TriagePage() {
               </div>
             </div>
           )}
+
+          {/* Alerta de Data Fora do Período da Viagem */}
+          {isOutOfTripPeriod && (
+            <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-amber-900 text-xs font-semibold flex items-center gap-2 shadow-xs">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>
+                Alerta: Data fora do período da viagem (
+                {assignedTrip
+                  ? `${formatDateBR(assignedTrip.start_date)} até ${formatDateBR(assignedTrip.end_date)}`
+                  : 'período não definido'}
+                ).
+              </span>
+            </div>
+          )}
           {/* Document Viewer Frame with full PDF / Image / Fallback support */}
           <DocumentViewer
             fileName={currentExpense.file_name}
@@ -734,6 +826,46 @@ export default function TriagePage() {
               {/* Data Real de Emissão e Hora */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
+                  {/* Alerta amarelo de divergência de Data entre Planilha e OCR */}
+                  {(() => {
+                    const div = sheetDivergences.find((d) => d.field === 'date')
+                    if (!div) return null
+                    return (
+                      <div className="p-2 rounded-md bg-amber-50 border border-amber-300 text-amber-900 text-[11px] flex items-center justify-between gap-1.5 animate-fadeIn">
+                        <span className="truncate">
+                          ⚠️ Planilha: <strong>{div.sheetVal}</strong> | OCR App:{' '}
+                          <strong>{div.ocrVal}</strong>
+                        </span>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              if (div.rawSheet) setIssueDate(div.rawSheet)
+                            }}
+                            className="h-5 px-1.5 text-[10px] bg-amber-200/70 hover:bg-amber-200 text-amber-950 font-semibold"
+                          >
+                            Usar Planilha
+                          </Button>
+                          {div.rawOcr && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => {
+                                if (div.rawOcr) setIssueDate(div.rawOcr)
+                              }}
+                              className="h-5 px-1.5 text-[10px] bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 font-semibold"
+                            >
+                              Alternar OCR
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })()}
+
                   <Label
                     htmlFor="issue_date"
                     className="text-xs font-semibold text-slate-700 flex items-center gap-1.5"
@@ -816,6 +948,46 @@ export default function TriagePage() {
 
               {/* Categoria */}
               <div className="space-y-1.5">
+                {/* Alerta amarelo de divergência de Categoria entre Planilha e OCR */}
+                {(() => {
+                  const div = sheetDivergences.find((d) => d.field === 'category')
+                  if (!div) return null
+                  return (
+                    <div className="p-2 rounded-md bg-amber-50 border border-amber-300 text-amber-900 text-[11px] flex items-center justify-between gap-1.5 animate-fadeIn">
+                      <span className="truncate">
+                        ⚠️ Planilha: <strong>{div.sheetVal}</strong> | OCR App:{' '}
+                        <strong>{div.ocrVal}</strong>
+                      </span>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            if (div.rawSheet) setCategory(div.rawSheet as ExpenseCategory)
+                          }}
+                          className="h-5 px-1.5 text-[10px] bg-amber-200/70 hover:bg-amber-200 text-amber-950 font-semibold"
+                        >
+                          Usar Planilha
+                        </Button>
+                        {div.rawOcr && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              if (div.rawOcr) setCategory(div.rawOcr as ExpenseCategory)
+                            }}
+                            className="h-5 px-1.5 text-[10px] bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 font-semibold"
+                          >
+                            Alternar OCR
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })()}
+
                 <Label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
                   <Tag className="w-3.5 h-3.5 text-slate-400" />
                   Categoria de Despesa *
@@ -978,6 +1150,46 @@ export default function TriagePage() {
 
               {/* Valor Total (R$) + REGRA 2: Botão Manual Sempre Disponível */}
               <div className="space-y-2">
+                {/* Alerta amarelo de divergência de Valor entre Planilha e OCR */}
+                {(() => {
+                  const div = sheetDivergences.find((d) => d.field === 'amount')
+                  if (!div) return null
+                  return (
+                    <div className="p-2 rounded-md bg-amber-50 border border-amber-300 text-amber-900 text-[11px] flex items-center justify-between gap-1.5 animate-fadeIn">
+                      <span className="truncate">
+                        ⚠️ Planilha: <strong>{div.sheetVal}</strong> | OCR App:{' '}
+                        <strong>{div.ocrVal}</strong>
+                      </span>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            if (div.rawSheet) setAmountStr(div.rawSheet)
+                          }}
+                          className="h-5 px-1.5 text-[10px] bg-amber-200/70 hover:bg-amber-200 text-amber-950 font-semibold"
+                        >
+                          Usar Planilha
+                        </Button>
+                        {div.rawOcr && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              if (div.rawOcr) setAmountStr(div.rawOcr)
+                            }}
+                            className="h-5 px-1.5 text-[10px] bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 font-semibold"
+                          >
+                            Alternar OCR
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })()}
+
                 <div className="flex items-center justify-between">
                   <Label
                     htmlFor="amount"

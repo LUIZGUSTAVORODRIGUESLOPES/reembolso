@@ -14,11 +14,19 @@ import {
   Calendar,
   Building2,
   FileCheck,
+  FileSpreadsheet,
   HelpCircle,
   Cpu,
   Layers,
 } from 'lucide-react'
 import { processRealReceiptOcr, ProcessedReceiptOcr } from '@/services/ocrService'
+import {
+  SpreadsheetParseResult,
+  isSpreadsheetFile,
+  parseSpreadsheetFile,
+  evaluateReceiptAgainstSpreadsheet,
+  MatchEvaluationResult,
+} from '@/services/batchSpreadsheetService'
 import { storageService } from '@/services/storageService'
 import { Expense, Trip } from '@/types/database'
 import { formatCurrencyBRL, formatDateBR, CATEGORY_LABELS, CATEGORY_COLORS } from '@/lib/formatters'
@@ -41,6 +49,7 @@ interface QueueFile {
   duplicateMatch?: Expense | null
   keepDuplicate?: boolean
   assignedTripId?: string // assigned trip id or 'new'
+  sheetEvaluation?: MatchEvaluationResult
 }
 
 interface AiTripSuggestion {
@@ -68,6 +77,11 @@ export default function UploadPage() {
   const [currentStepMessage, setCurrentStepMessage] = useState<string>('')
   const [aiSuggestions, setAiSuggestions] = useState<AiTripSuggestion[]>([])
 
+  // Estado para detecção de planilha de referência no lote
+  const [spreadsheetFile, setSpreadsheetFile] = useState<File | null>(null)
+  const [spreadsheetData, setSpreadsheetData] = useState<SpreadsheetParseResult | null>(null)
+  const [spreadsheetParsing, setSpreadsheetParsing] = useState(false)
+
   // Modal de desbloqueio de viagem a partir do seletor
   const [tripToUnlock, setTripToUnlock] = useState<Trip | null>(null)
   const [unlockModalOpen, setUnlockModalOpen] = useState(false)
@@ -87,23 +101,59 @@ export default function UploadPage() {
       })
   }, [authLoading, user?.id])
 
-  const handleFilesSelected = (files: FileList | null) => {
+  const handleFilesSelected = async (files: FileList | null) => {
     if (!files || files.length === 0) return
 
-    const newItems: QueueFile[] = Array.from(files).map((file, idx) => ({
-      id: `file-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 5)}`,
-      file,
-      status: 'pending',
-      progress: 0,
-      statusMessage: 'Pendente de processamento OCR',
-    }))
+    const fileList = Array.from(files)
+    const spreadsheetCandidate = fileList.find((f) => isSpreadsheetFile(f))
+    const receiptFiles = fileList.filter((f) => !isSpreadsheetFile(f))
 
-    setQueue((prev) => [...prev, ...newItems])
-    toast({
-      title: `${newItems.length} comprovante(s) adicionado(s)`,
-      description:
-        'Clique em "Iniciar OCR Real" para processar o texto e extrair dados autênticos.',
-    })
+    if (spreadsheetCandidate) {
+      setSpreadsheetFile(spreadsheetCandidate)
+      setSpreadsheetParsing(true)
+      try {
+        const parsed = await parseSpreadsheetFile(spreadsheetCandidate)
+        setSpreadsheetData(parsed)
+        if (parsed.errors.length > 0) {
+          toast({
+            title: 'Aviso na planilha de referência',
+            description: parsed.errors[0],
+            variant: 'destructive',
+          })
+        } else {
+          toast({
+            title: 'Planilha de referência detectada!',
+            description: `${parsed.rows.length} itens encontrados em ${spreadsheetCandidate.name}.`,
+          })
+        }
+      } catch (err: any) {
+        console.error('Falha ao processar planilha:', err)
+        toast({
+          title: 'Erro ao ler planilha',
+          description: err?.message || 'Não foi possível carregar os dados da planilha.',
+          variant: 'destructive',
+        })
+      } finally {
+        setSpreadsheetParsing(false)
+      }
+    }
+
+    if (receiptFiles.length > 0) {
+      const newItems: QueueFile[] = receiptFiles.map((file, idx) => ({
+        id: `file-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 5)}`,
+        file,
+        status: 'pending',
+        progress: 0,
+        statusMessage: 'Pendente de processamento OCR',
+      }))
+
+      setQueue((prev) => [...prev, ...newItems])
+      toast({
+        title: `${newItems.length} comprovante(s) adicionado(s)`,
+        description:
+          'Clique em "Iniciar OCR Real" para processar o texto e conciliar com a planilha.',
+      })
+    }
   }
 
   const removeFile = (id: string) => {
@@ -191,6 +241,39 @@ export default function UploadPage() {
 
         // Default assignment: associate to trip closest to date or triage trip
         item.assignedTripId = findBestTripForDate(extracted.issue_date, existingTrips)
+
+        // Conciliação assistida por planilha de referência se houver planilha no lote
+        if (spreadsheetData && spreadsheetData.rows.length > 0) {
+          const assignedTrip = existingTrips.find((t) => t.id === item.assignedTripId)
+          const tripPeriod =
+            assignedTrip && assignedTrip.start_date && assignedTrip.end_date
+              ? { startDate: assignedTrip.start_date, endDate: assignedTrip.end_date }
+              : undefined
+
+          const evaluation = evaluateReceiptAgainstSpreadsheet({
+            receiptFileName: item.file.name,
+            ocrData: {
+              issue_date: extracted.issue_date,
+              amount: extracted.amount,
+              category: extracted.category,
+              merchant_name: extracted.merchant_name,
+              cnpj: extracted.cnpj,
+            },
+            spreadsheetRows: spreadsheetData.rows,
+            tripPeriod,
+          })
+
+          item.sheetEvaluation = evaluation
+
+          if (evaluation.hasSheetMatch) {
+            if (evaluation.is100PercentMatch) {
+              item.statusMessage = '100% Compatível com Planilha (Aprovação Automática)'
+            } else {
+              item.statusMessage = `Divergência detectada com a planilha (${evaluation.discrepancies.length} campo(s))`
+            }
+          }
+        }
+
         item.progress = 100
       } catch (err: any) {
         console.error(`Error processing file ${item.file.name}:`, err)
@@ -397,29 +480,97 @@ export default function UploadPage() {
         }
 
         const ext = item.extracted
+        const sheetEval = item.sheetEvaluation
+
+        let issueDate = ext?.issue_date || new Date().toISOString().split('T')[0]
+        let category = ext?.category || 'outros'
+        let merchantName = ext?.merchant_name
+          ? ext.merchant_name.trim()
+          : 'Estabelecimento a identificar'
+        let amount = ext?.amount !== null && ext?.amount !== undefined ? Number(ext.amount) : 0
+        let cnpj = ext?.cnpj || null
+        let isVerified = false
+        let auditStatus: 'pendente' | 'conforme' | 'com_ressalvas' = 'pendente'
+
+        // Se houver vinculação com a planilha:
+        if (sheetEval && sheetEval.hasSheetMatch) {
+          // A Planilha é a sugestão principal
+          if (sheetEval.suggestedValues.issue_date) {
+            issueDate = sheetEval.suggestedValues.issue_date
+          }
+          if (sheetEval.suggestedValues.merchant_name) {
+            merchantName = sheetEval.suggestedValues.merchant_name
+          }
+          if (sheetEval.suggestedValues.cnpj) {
+            cnpj = sheetEval.suggestedValues.cnpj
+          }
+          if (sheetEval.suggestedValues.category) {
+            category = sheetEval.suggestedValues.category
+          }
+          if (
+            sheetEval.suggestedValues.amount !== undefined &&
+            sheetEval.suggestedValues.amount !== null
+          ) {
+            amount = sheetEval.suggestedValues.amount
+          }
+
+          // Agrega auditFlags da avaliação (divergências, pontos, período, duplicidade)
+          sheetEval.auditFlags.forEach((flag) => {
+            if (!auditFlags.includes(flag)) {
+              auditFlags.push(flag)
+            }
+          })
+
+          // Decisão Automática de Status:
+          // 100% Compatível (Match nos 3 campos): Marque automaticamente a despesa como Conferida
+          if (sheetEval.is100PercentMatch) {
+            isVerified = true
+            auditStatus = 'conforme'
+            auditFlags.push('planilha_conferida_100_compativel')
+          } else {
+            // Divergência Detectada: Mantenha na fila de Triagem Manual (is_verified = false)
+            isVerified = false
+            auditStatus = 'pendente'
+            auditFlags.push('planilha_divergencia_revisao_necessaria')
+          }
+        }
+
         await storageService.createExpense({
           trip_id: finalTripId,
           file_name: item.file.name,
           file_url: uploadedFileUrl,
-          issue_date: ext?.issue_date || new Date().toISOString().split('T')[0],
+          issue_date: issueDate,
           issue_time: ext?.issue_time || null,
-          category: ext?.category || 'outros',
-          merchant_name: ext?.merchant_name
-            ? ext.merchant_name.trim()
-            : 'Estabelecimento a identificar',
-          amount: ext?.amount !== null && ext?.amount !== undefined ? Number(ext.amount) : 0,
+          category,
+          merchant_name: merchantName,
+          amount,
           ocr_raw_text: ext?.ocr_raw_text || 'Arquivo sem texto extraído',
-          is_verified: false,
+          is_verified: isVerified,
           audit_flags: auditFlags,
-          audit_status: 'pendente',
-          cnpj: ext?.cnpj || null,
+          audit_status: auditStatus,
+          cnpj,
         })
       }
 
-      toast({
-        title: 'Comprovantes gravados com sucesso!',
-        description: 'Todos os arquivos foram salvos. Redirecionando para Triagem...',
-      })
+      // Contagem para o resumo final solicitado
+      const autoVerifiedCount = finishedItems.filter(
+        (i) => i.sheetEvaluation?.hasSheetMatch && i.sheetEvaluation.is100PercentMatch,
+      ).length
+      const divergenceCount = finishedItems.filter(
+        (i) => i.sheetEvaluation?.hasSheetMatch && !i.sheetEvaluation.is100PercentMatch,
+      ).length
+
+      if (spreadsheetData && (autoVerifiedCount > 0 || divergenceCount > 0)) {
+        toast({
+          title: 'Lote com planilha finalizado!',
+          description: `${autoVerifiedCount} comprovantes conferidos automaticamente (100% compatíveis com a planilha) e ${divergenceCount} enviados para triagem por divergência.`,
+        })
+      } else {
+        toast({
+          title: 'Comprovantes gravados com sucesso!',
+          description: 'Todos os arquivos foram salvos. Redirecionando para Triagem...',
+        })
+      }
 
       setTimeout(() => {
         navigate('/triage')
@@ -472,7 +623,7 @@ export default function UploadPage() {
             ref={fileInputRef}
             type="file"
             multiple
-            accept=".pdf,.png,.jpg,.jpeg,.webp"
+            accept=".pdf,.png,.jpg,.jpeg,.webp,.xlsx,.csv,.xls"
             className="hidden"
             onChange={(e) => handleFilesSelected(e.target.files)}
           />
@@ -496,10 +647,14 @@ export default function UploadPage() {
             </button>
           </h3>
           <p className="text-xs text-slate-500 mt-1.5 max-w-md">
-            Múltiplos arquivos suportados (PDF digital ou escaneado, PNG, JPG, JPEG, WEBP).
+            Múltiplos arquivos suportados (PDF digital ou escaneado, PNG, JPG, JPEG, WEBP) e
+            planilhas de referência (.xlsx ou .csv).
           </p>
 
           <div className="mt-4 flex items-center gap-2 flex-wrap justify-center">
+            <span className="text-[11px] bg-emerald-50 text-emerald-800 px-2.5 py-1 rounded-full font-semibold border border-emerald-300 flex items-center gap-1">
+              <FileSpreadsheet className="w-3 h-3 text-emerald-600" /> Planilhas .xlsx / .csv
+            </span>
             <span className="text-[11px] bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full font-medium border border-slate-200">
               PDFs Fiscais & Imagens
             </span>
@@ -517,8 +672,48 @@ export default function UploadPage() {
       </Card>
 
       {/* Queue & Processing Actions */}
-      {queue.length > 0 && (
+      {(queue.length > 0 || spreadsheetFile) && (
         <div className="space-y-4">
+          {/* Badge / Banner Informativo de Planilha de Referência */}
+          {spreadsheetFile && (
+            <div className="bg-emerald-50 border border-emerald-300 p-3.5 rounded-xl flex items-center justify-between gap-3 text-emerald-900 shadow-2xs">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                  <FileSpreadsheet className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-bold truncate">{spreadsheetFile.name}</span>
+                    <Badge className="bg-emerald-600 text-white font-semibold text-[11px]">
+                      Planilha de referência detectada ({spreadsheetData?.rows.length || 0} itens
+                      vinculados)
+                    </Badge>
+                  </div>
+                  <p className="text-[11px] text-emerald-700 mt-0.5">
+                    Os dados da planilha serão usados como sugestão prioritária e validados pelo OCR
+                    interno.
+                  </p>
+                </div>
+              </div>
+
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setSpreadsheetFile(null)
+                  setSpreadsheetData(null)
+                  toast({
+                    title: 'Planilha removida do lote',
+                    description: 'O lote voltará a processar apenas pelo OCR nativo.',
+                  })
+                }}
+                className="text-xs text-emerald-800 hover:text-rose-600 hover:bg-emerald-100 shrink-0 h-7"
+              >
+                Remover Planilha
+              </Button>
+            </div>
+          )}
+
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
             <div>
               <h4 className="font-bold text-slate-900 text-sm flex items-center gap-2 flex-wrap">
@@ -746,6 +941,23 @@ export default function UploadPage() {
                           )}
                         </div>
                       </div>
+
+                      {/* Sheet Evaluation Preview Badge */}
+                      {item.sheetEvaluation?.hasSheetMatch && (
+                        <div className="shrink-0">
+                          {item.sheetEvaluation.is100PercentMatch ? (
+                            <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 text-[11px] gap-1 py-1 font-semibold">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                              100% Compatível com Planilha
+                            </Badge>
+                          ) : (
+                            <Badge className="bg-amber-100 text-amber-900 border-amber-300 text-[11px] gap-1 py-1 font-semibold">
+                              <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                              Divergência ({item.sheetEvaluation.discrepancies.length})
+                            </Badge>
+                          )}
+                        </div>
+                      )}
 
                       {/* Extracted preview values (HONEST: displays what was found or warning) */}
                       {ext ? (
